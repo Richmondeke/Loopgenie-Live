@@ -187,7 +187,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         cta: 'Create Audio'
     },
 
-    // COMING SOON / BETA TOOLS
+    // VEO / GEMINI TOOLS (Now LIVE)
     {
         id: 'ai_video',
         title: 'AI Video',
@@ -196,7 +196,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         colorClass: 'text-purple-600',
         bgClass: 'bg-purple-900/10',
         imgUrl: 'https://images.unsplash.com/photo-1618172193763-c511deb635ca?auto=format&fit=crop&w=800&q=80',
-        status: 'COMING SOON',
+        status: 'LIVE',
         onClick: handleSelectTextToVideo,
         cta: 'Generate'
     },
@@ -208,7 +208,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         colorClass: 'text-teal-600',
         bgClass: 'bg-teal-900/10',
         imgUrl: 'https://images.unsplash.com/photo-1629198688000-71f23e745b6e?auto=format&fit=crop&w=800&q=80',
-        status: 'COMING SOON',
+        status: 'LIVE',
         onClick: handleSelectProductUGC,
         cta: 'Create Video'
     },
@@ -220,10 +220,11 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         colorClass: 'text-sky-600',
         bgClass: 'bg-sky-900/10',
         imgUrl: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=800&q=80',
-        status: 'COMING SOON',
+        status: 'LIVE',
         onClick: handleSelectImageToVideo,
         cta: 'Animate'
     },
+    // COMPOSITION EDITOR (Still Beta)
     {
         id: 'video_editor',
         title: 'Video Editor',
@@ -233,7 +234,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         bgClass: 'bg-gray-900/10',
         imgUrl: 'https://images.unsplash.com/photo-1574717432707-c25c8587a3ea?auto=format&fit=crop&w=800&q=80',
         status: 'COMING SOON',
-        onClick: () => {}, // No action implemented
+        onClick: () => {}, 
         cta: 'Open Editor'
     }
   ];

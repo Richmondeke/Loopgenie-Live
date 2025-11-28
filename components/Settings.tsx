@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { Key, Save, Eye, EyeOff, CheckCircle, Volume2, Sparkles } from 'lucide-react';
+import { Key, Save, Eye, EyeOff, CheckCircle, Volume2 } from 'lucide-react';
 
 interface SettingsProps {
   heyGenKey: string;
@@ -17,16 +18,11 @@ export const Settings: React.FC<SettingsProps> = ({
   const [localElevenKey, setLocalElevenKey] = useState(localStorage.getItem('genavatar_eleven_key') || '');
   const [showEleven, setShowEleven] = useState(false);
 
-  // Gemini Key State
-  const [localGeminiKey, setLocalGeminiKey] = useState(localStorage.getItem('gemini_api_key') || '');
-  const [showGemini, setShowGemini] = useState(false);
-
   const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
     setHeyGenKey(localHeyGen);
     localStorage.setItem('genavatar_eleven_key', localElevenKey);
-    localStorage.setItem('gemini_api_key', localGeminiKey);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -48,29 +44,6 @@ export const Settings: React.FC<SettingsProps> = ({
             </div>
 
             <div className="space-y-6">
-                {/* Gemini API Key */}
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        Google Gemini API Key <Sparkles size={14} className="text-blue-500" />
-                    </label>
-                    <div className="relative">
-                        <input
-                            type={showGemini ? "text" : "password"}
-                            value={localGeminiKey}
-                            onChange={(e) => setLocalGeminiKey(e.target.value)}
-                            className="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                            placeholder="Enter Gemini API Key (Required for AI features)"
-                        />
-                        <button
-                            onClick={() => setShowGemini(!showGemini)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                        >
-                            {showGemini ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-1">Required if running outside of AI Studio.</p>
-                </div>
-
                 {/* HeyGen Key */}
                 <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">HeyGen API Key</label>
@@ -135,6 +108,7 @@ export const Settings: React.FC<SettingsProps> = ({
         <h4 className="text-sm font-semibold text-blue-900 mb-1">Note on Security</h4>
         <p className="text-xs text-blue-800 leading-relaxed">
             This is a client-side demonstration application. Your keys are persisted only in your browser's local storage.
+            Google Gemini API Key is injected automatically from the environment.
         </p>
       </div>
     </div>
