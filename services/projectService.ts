@@ -1,5 +1,4 @@
 
-
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
 
@@ -11,11 +10,14 @@ const mapRowToProject = (row: any): Project => {
   // Robust fallback: Infer type from ID if column is missing or null
   // This ensures the app works even if the user hasn't run the latest migration
   if (!pType) {
-    if (row.id && String(row.id).startsWith('ugc_')) {
-      pType = 'UGC_PRODUCT';
-    } else {
-      pType = 'AVATAR';
-    }
+    const idStr = String(row.id || '');
+    if (idStr.startsWith('ugc_')) pType = 'UGC_PRODUCT';
+    else if (idStr.startsWith('stor_')) pType = 'STORYBOOK';
+    else if (idStr.startsWith('short_')) pType = 'SHORTS';
+    else if (idStr.startsWith('aud_')) pType = 'AUDIOBOOK';
+    else if (idStr.startsWith('imgv_')) pType = 'IMAGE_TO_VIDEO';
+    else if (idStr.startsWith('txtv_')) pType = 'TEXT_TO_VIDEO';
+    else pType = 'AVATAR';
   }
 
   return {

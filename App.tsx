@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -169,7 +168,8 @@ const App: React.FC = () => {
     if (userCredits < cost) {
         // Automatically open upgrade modal if credits are insufficient
         setIsUpgradeModalOpen(true);
-        return;
+        // We throw so child components know generation was aborted
+        throw new Error("Insufficient credits");
     }
 
     try {
@@ -184,11 +184,19 @@ const App: React.FC = () => {
 
         let newProject: Project;
         if (data.isDirectSave) {
+            // Generate semantic ID prefix
+            let idPrefix = 'ugc_';
+            if (data.type === 'STORYBOOK') idPrefix = 'stor_';
+            else if (data.type === 'SHORTS') idPrefix = 'short_';
+            else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
+            else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
+            else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
+
             newProject = {
-                id: `ugc_${Date.now()}`,
+                id: `${idPrefix}${Date.now()}`,
                 templateId: selectedTemplate.id,
                 templateName: data.templateName || selectedTemplate.name,
-                thumbnailUrl: data.thumbnailUrl || 'https://via.placeholder.com/640x360?text=Product+UGC',
+                thumbnailUrl: data.thumbnailUrl || 'https://via.placeholder.com/640x360?text=Project',
                 videoUrl: data.videoUrl,
                 status: ProjectStatus.COMPLETED,
                 createdAt: Date.now(),
@@ -248,6 +256,9 @@ const App: React.FC = () => {
         }
         
         alert(`Generation Failed: ${msg}. \n\nCredits have been refunded.`);
+        
+        // Critical: Re-throw error so child components (Editor) know it failed
+        throw error;
     } finally {
         setIsGenerating(false);
     }

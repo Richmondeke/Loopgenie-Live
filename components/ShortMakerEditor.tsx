@@ -7,7 +7,7 @@ import { getApiKey } from '../services/geminiService';
 
 interface ShortMakerEditorProps {
     onBack: () => void;
-    onGenerate: (data: any) => void;
+    onGenerate: (data: any) => Promise<void> | void;
     userCredits: number;
     template: Template;
 }
@@ -174,18 +174,26 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             // FINISH & AUTO SAVE
             setStep('COMPLETE');
 
-            // Auto Save
-            onGenerate({
-                isDirectSave: true,
-                videoUrl: finalVideoUrl,
-                thumbnailUrl: manifestWithAudio.scenes[0].generated_image_url,
-                cost: COST,
-                templateName: (isStorybook ? "Story: " : "Short: ") + manifestWithAudio.title,
-                type: isStorybook ? 'STORYBOOK' : 'SHORTS',
-                shouldRedirect: false
-            });
-            setIsSaved(true);
-            addLog("💾 Project saved automatically.");
+            addLog("💾 Saving project to library...");
+            try {
+                // Await saving to ensure we catch any errors (credits, db, etc)
+                await onGenerate({
+                    isDirectSave: true,
+                    videoUrl: finalVideoUrl,
+                    thumbnailUrl: manifestWithAudio.scenes[0].generated_image_url,
+                    cost: COST,
+                    templateName: (isStorybook ? "Story: " : "Short: ") + manifestWithAudio.title,
+                    type: isStorybook ? 'STORYBOOK' : 'SHORTS',
+                    shouldRedirect: false
+                });
+                setIsSaved(true);
+                addLog("✅ Project saved successfully.");
+            } catch (saveError) {
+                console.error("Save error:", saveError);
+                addLog("❌ Error saving project. Please check your credits.");
+                // We do NOT set errorMsg here to avoid blocking the video preview, 
+                // but we flag that saving failed.
+            }
 
         } catch (e: any) {
             console.error(e);
