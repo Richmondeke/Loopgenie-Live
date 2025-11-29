@@ -6,17 +6,25 @@ import { GEMINI_API_KEYS } from "../constants";
 // Helper to get API Key strictly from env, local storage, or constants
 export const getApiKey = () => {
     // 1. Try environment variable (Standard practice)
-    if (process.env.API_KEY) return process.env.API_KEY;
+    if (process.env.API_KEY) {
+        console.debug("Using Gemini Key from: process.env");
+        return process.env.API_KEY;
+    }
 
     // 2. Try Local Storage (User entered in Settings)
     const localKey = localStorage.getItem('genavatar_gemini_key');
-    if (localKey) return localKey;
+    if (localKey) {
+        console.debug("Using Gemini Key from: localStorage");
+        return localKey;
+    }
     
     // 3. Try User provided key from constants (Fallback for demo/client-side apps)
     if (GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
+        console.debug("Using Gemini Key from: constants.ts (Default)");
         return GEMINI_API_KEYS[0];
     }
     
+    console.warn("No Gemini API Key found.");
     return "";
 };
 

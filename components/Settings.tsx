@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
-import { Key, Save, Eye, EyeOff, CheckCircle, Volume2, Sparkles } from 'lucide-react';
+import { Key, Save, Eye, EyeOff, CheckCircle, Volume2, Sparkles, RefreshCcw, ShieldCheck } from 'lucide-react';
+import { GEMINI_API_KEYS } from '../constants';
 
 interface SettingsProps {
   heyGenKey: string;
@@ -24,12 +25,27 @@ export const Settings: React.FC<SettingsProps> = ({
 
   const [saved, setSaved] = useState(false);
 
+  // Check if a default key exists in constants
+  const hasDefaultGeminiKey = GEMINI_API_KEYS.length > 0 && !!GEMINI_API_KEYS[0];
+  const isUsingDefaultGemini = !localGeminiKey && hasDefaultGeminiKey;
+
   const handleSave = () => {
     setHeyGenKey(localHeyGen);
     localStorage.setItem('genavatar_eleven_key', localElevenKey);
-    localStorage.setItem('genavatar_gemini_key', localGeminiKey);
+    
+    // If user clears the box, remove from local storage to allow fallback to constant
+    if (!localGeminiKey) {
+        localStorage.removeItem('genavatar_gemini_key');
+    } else {
+        localStorage.setItem('genavatar_gemini_key', localGeminiKey);
+    }
+
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const clearGeminiKey = () => {
+      setLocalGeminiKey('');
   };
 
   return (
@@ -51,25 +67,51 @@ export const Settings: React.FC<SettingsProps> = ({
             <div className="space-y-6">
                 {/* Gemini Key (New) */}
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                        Google Gemini API Key <Sparkles size={14} className="text-blue-500" />
+                    <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                             Google Gemini API Key <Sparkles size={14} className="text-blue-500" />
+                        </div>
+                        {isUsingDefaultGemini && (
+                            <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full flex items-center gap-1 border border-green-100">
+                                <ShieldCheck size={10} /> System Default Active
+                            </span>
+                        )}
                     </label>
-                    <div className="relative">
+                    <div className="relative group">
                         <input
                             type={showGemini ? "text" : "password"}
                             value={localGeminiKey}
                             onChange={(e) => setLocalGeminiKey(e.target.value)}
-                            className="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                            placeholder="AIza..."
+                            className={`w-full pl-4 pr-20 py-2 border rounded-lg outline-none transition-all ${
+                                isUsingDefaultGemini 
+                                ? 'border-green-300 bg-green-50/30 focus:ring-2 focus:ring-green-500/50' 
+                                : 'border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500'
+                            }`}
+                            placeholder={isUsingDefaultGemini ? "Using System Default Key" : "AIza..."}
                         />
-                        <button
-                            onClick={() => setShowGemini(!showGemini)}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                        >
-                            {showGemini ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                             {localGeminiKey && (
+                                <button
+                                    onClick={clearGeminiKey}
+                                    className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                                    title="Clear and use default"
+                                >
+                                    <RefreshCcw size={14} />
+                                </button>
+                             )}
+                            <button
+                                onClick={() => setShowGemini(!showGemini)}
+                                className="p-1.5 text-gray-400 hover:text-gray-600"
+                            >
+                                {showGemini ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                        </div>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">Required for Scripting, Storyboard, and Veo Video generation.</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                        {isUsingDefaultGemini 
+                            ? "Your app is currently using the embedded system key. Override it here if needed." 
+                            : "Required for Scripting, Storyboard, and Veo Video generation."}
+                    </p>
                 </div>
 
                 <div className="border-t border-gray-100 my-4" />
