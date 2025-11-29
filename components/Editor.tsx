@@ -746,6 +746,26 @@ const AudiobookEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => 
 // ==========================================
 // 4. Product UGC Editor (UPDATED for Multi-Shot)
 // ==========================================
+
+// Helper utility for retry logic
+async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 5, delayMs: number = 2000): Promise<T> {
+    let lastError: any;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await operation();
+        } catch (err) {
+            lastError = err;
+            console.warn(`Retry attempt ${i + 1} failed:`, err);
+            if (i < maxRetries - 1) {
+                // Exponential backoff: 2s, 4s, 8s, 16s...
+                const waitTime = delayMs * Math.pow(2, i);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+        }
+    }
+    throw lastError;
+}
+
 const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => {
     const [images, setImages] = useState<(string | null)[]>([null, null, null]);
     const [prompt, setPrompt] = useState('');
@@ -800,7 +820,7 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
             if (shotMode === 'SINGLE') {
                 // SINGLE SHOT LOGIC
                 setProgressLabel('Generating Video...');
-                const uri = await generateVeoProductVideo(prompt, validImages);
+                const uri = await retryOperation(() => generateVeoProductVideo(prompt, validImages), 3, 3000);
                 setVideoUri(uri);
                 completeGeneration(uri, COST);
 
@@ -820,28 +840,41 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
 
                 for (let i = 0; i < prompts.length; i++) {
                     setProgressLabel(`Generating Shot ${i + 1} of ${prompts.length}...`);
-                    // We reuse generateVeoProductVideo but passing specific prompts
-                    // Note: Ideally we pass the specific prompt + image. 
-                    // The generateVeoProductVideo uses 'veo-3.1-generate-preview' which takes multiple refs.
-                    // We can reuse the same refs or just the main one.
+                    
                     try {
-                        const clipUri = await generateVeoProductVideo(prompts[i], validImages);
+                        // Use robust retry mechanism with exponential backoff
+                        const clipUri = await retryOperation(
+                            () => generateVeoProductVideo(prompts[i], validImages),
+                            5, // Max Retries
+                            2000 // Initial Delay
+                        );
                         generatedClips.push(clipUri);
                     } catch (e) {
-                        console.warn(`Failed to generate clip ${i+1}`, e);
-                        // Continue if at least one works? Or fail hard?
-                        // Let's fail hard for now to ensure quality
-                        throw new Error(`Failed to generate shot ${i+1}. Please try again.`);
+                        console.error(`Failed to generate shot ${i+1} after maximum retries.`, e);
+                        
+                        // FAILSAFE: If we have at least one valid clip, reuse it or skip this shot
+                        // This prevents the entire project from failing due to one bad generation
+                        if (generatedClips.length > 0) {
+                             console.warn(`Falling back: Reusing shot 1 for shot ${i+1}`);
+                             // Clone the first clip as a fallback to ensure we have enough footage
+                             generatedClips.push(generatedClips[0]);
+                        } else {
+                             // If the VERY first shot fails 5 times, we really can't proceed.
+                             throw new Error(`Failed to generate shot ${i+1}. Service might be busy. Please try again later.`);
+                        }
                     }
                 }
 
                 // 3. Stitch Videos
-                setStatus('stitching');
-                setProgressLabel('Stitching Scenes...');
-                const finalUri = await concatenateVideos(generatedClips);
-                
-                setVideoUri(finalUri);
-                completeGeneration(finalUri, COST);
+                if (generatedClips.length > 0) {
+                    setStatus('stitching');
+                    setProgressLabel('Stitching Scenes...');
+                    const finalUri = await concatenateVideos(generatedClips);
+                    setVideoUri(finalUri);
+                    completeGeneration(finalUri, COST);
+                } else {
+                    throw new Error("Failed to generate any video clips.");
+                }
             }
 
         } catch (error: any) {

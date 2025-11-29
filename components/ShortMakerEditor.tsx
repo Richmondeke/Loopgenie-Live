@@ -103,9 +103,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 
                 let url = '';
                 let attempts = 0;
+                const maxAttempts = 5; // Increased retry limit for robustness
                 
                 // Retry loop for robustness
-                while (!url && attempts < 3) {
+                while (!url && attempts < maxAttempts) {
                     try {
                         url = await generateSceneImage(
                             workingScenes[i],
@@ -123,13 +124,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         
                     } catch (err) {
                         attempts++;
-                        console.warn(`Failed to gen image for scene ${i} (Attempt ${attempts}/3)`, err);
+                        console.warn(`Failed to gen image for scene ${i} (Attempt ${attempts}/${maxAttempts})`, err);
                         
-                        if (attempts < 3) {
+                        if (attempts < maxAttempts) {
                             addLog(`⚠️ Retrying Scene ${i+1}...`);
-                            await new Promise(r => setTimeout(r, 2000)); // Wait 2s before retry
+                            // Progressive Backoff: 2s, 4s, 8s, 16s
+                            const delay = 2000 * Math.pow(2, attempts - 1);
+                            await new Promise(r => setTimeout(r, delay)); 
                         } else {
-                            addLog(`❌ Failed to generate image for Scene ${i+1} after 3 attempts.`);
+                            addLog(`❌ Failed to generate image for Scene ${i+1} after ${maxAttempts} attempts.`);
                             // We continue even if one image fails (it will be black/blank in video)
                         }
                     }
