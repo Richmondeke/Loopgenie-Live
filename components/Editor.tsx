@@ -795,11 +795,7 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
         setIsSaved(false);
 
         try {
-            if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-                const has = await window.aistudio.hasSelectedApiKey();
-                if (!has) await window.aistudio.openSelectKey();
-            }
-
+            // Removed prompting logic
             const uri = await generateVeoProductVideo(prompt, validImages);
             setVideoUri(uri);
             setStatus('completed');
@@ -976,11 +972,7 @@ const TextToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =
         setIsSaved(false);
 
         try {
-            if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-                const has = await window.aistudio.hasSelectedApiKey();
-                if (!has) await window.aistudio.openSelectKey();
-            }
-
+            // Removed prompting logic
             const uri = await generateVeoVideo(prompt, aspectRatio);
             setVideoUri(uri);
             setStatus('completed');
@@ -1133,11 +1125,7 @@ const ImageToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) 
         setIsSaved(false);
 
         try {
-            if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-                const has = await window.aistudio.hasSelectedApiKey();
-                if (!has) await window.aistudio.openSelectKey();
-            }
-
+            // Removed prompting logic
             const uri = await generateVeoImageToVideo(prompt, image);
             setVideoUri(uri);
             setStatus('completed');

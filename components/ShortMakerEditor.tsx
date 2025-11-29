@@ -1,5 +1,4 @@
 
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template } from '../types';
@@ -60,21 +59,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const runProduction = async () => {
         if (!idea.trim()) return;
         
-        // 1. Check API Key Availability (Crucial for preventing hangs)
-        // If the key is missing from environment, try to use the UI selector if available.
-        const envKey = getApiKey();
-        if (!envKey && window.aistudio) {
-             try {
-                const hasKey = await window.aistudio.hasSelectedApiKey();
-                if (!hasKey) {
-                    await window.aistudio.openSelectKey();
-                    // We wait for the user to select the key. 
-                    // Note: In some environments this might need a reload, but usually it injects the key.
-                }
-            } catch (e) {
-                console.warn("API Key UI check failed", e);
-            }
-        }
+        // Removed UI Key check to force use of default/env key
 
         setIsProcessing(true);
         setStep('SCRIPT');
@@ -201,17 +186,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             const msg = e.message || "Production failed.";
             setErrorMsg(msg);
             addLog(`❌ Critical Error: ${msg}`);
-            
-            // Auto-trigger key selection if missing key error is detected
-            // This catches cases where the key was missing but we proceeded, or it expired
-            if ((msg.includes("API key") || msg.includes("API_KEY")) && window.aistudio) {
-                addLog("🔑 API Key Missing. Opening selection dialog...");
-                setTimeout(() => {
-                    window.aistudio?.openSelectKey().then(() => {
-                         addLog("ℹ️ Please select a paid key and click 'Retry'.");
-                    });
-                }, 1000);
-            }
+            // Removed prompt logic here to ensure we only use default key
         } finally {
             setIsProcessing(false);
         }
@@ -413,14 +388,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 <span className="text-red-200 text-sm break-all">{errorMsg}</span>
                             </div>
                             <div className="flex gap-2 mt-2 sm:mt-0">
-                                {window.aistudio && (
-                                     <button 
-                                        onClick={() => window.aistudio?.openSelectKey()}
-                                        className="bg-indigo-700 px-3 py-1 rounded text-xs hover:bg-indigo-600 flex items-center gap-1"
-                                     >
-                                        <Key size={12} /> Set API Key
-                                     </button>
-                                )}
                                 <button 
                                     onClick={() => setStep('INPUT')}
                                     className="bg-gray-800 border border-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-700 flex items-center gap-1"

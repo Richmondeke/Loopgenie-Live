@@ -1,13 +1,20 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
+import { GEMINI_API_KEYS } from "../constants";
 
-// Helper to get API Key strictly from env as per instructions
+// Helper to get API Key strictly from env or constants
 export const getApiKey = () => {
-    // The API key must be obtained exclusively from the environment variable process.env.API_KEY
-    const key = process.env.API_KEY;
+    // 1. Try environment variable
+    let key = process.env.API_KEY;
+    
+    // 2. Fallback to constants pool if env is missing/empty
+    if (!key && GEMINI_API_KEYS && GEMINI_API_KEYS.length > 0) {
+        key = GEMINI_API_KEYS[0];
+    }
+
     if (!key) {
-        console.warn("API_KEY environment variable is missing.");
+        console.warn("API_KEY is missing from environment and constants.");
     }
     return key || "";
 };
