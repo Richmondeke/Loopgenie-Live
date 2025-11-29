@@ -224,7 +224,12 @@ function drawCaptions(ctx: CanvasRenderingContext2D, text: string, cvsWidth: num
     // Semi-transparent black box
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; 
     ctx.beginPath();
-    ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 10);
+    // Use simple rect for broader compatibility if roundRect missing, though most browsers have it
+    if (ctx.roundRect) {
+        ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 10);
+    } else {
+        ctx.rect(boxX, boxY, boxWidth, boxHeight);
+    }
     ctx.fill();
 
     // Draw Text
@@ -250,9 +255,6 @@ export const cropVideo = async (
     targetWidth: number,
     targetHeight: number
 ): Promise<string> => {
-    // Existing cropVideo logic remains unchanged as it wasn't requested for change
-    // ... (Use previous implementation or keep stub if not modifying this specific function logic widely)
-    // For brevity, using the previous logic essential for Avatar mode.
     console.log(`Starting video crop to ${targetWidth}x${targetHeight}...`);
 
     return new Promise((resolve, reject) => {

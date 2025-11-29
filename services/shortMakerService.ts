@@ -51,11 +51,63 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   // CRITICAL FIX: Sanitize idea to prevent length explosion or JSON breaking
   const ideaClean = (req.idea || '').substring(0, 500).replace(/"/g, "'").replace(/\n/g, " ");
 
+  // Schema Definition
+  // We define this locally to inject into the prompt since we cannot use responseSchema config with tools
+  const schemaDefinition = {
+    type: "OBJECT",
+    properties: {
+      title: { type: "STRING" },
+      final_caption: { type: "STRING" },
+      voice_instruction: {
+        type: "OBJECT",
+        properties: {
+          voice: { type: "STRING" },
+          lang: { type: "STRING" },
+          tone: { type: "STRING" }
+        }
+      },
+      output_settings: {
+        type: "OBJECT",
+        properties: {
+          video_resolution: { type: "STRING" },
+          fps: { type: "NUMBER" },
+          scene_duration_default: { type: "NUMBER" }
+        }
+      },
+      scenes: {
+        type: "ARRAY",
+        items: {
+          type: "OBJECT",
+          properties: {
+            scene_number: { type: "NUMBER" },
+            duration_seconds: { type: "NUMBER" },
+            narration_text: { type: "STRING" },
+            visual_description: { type: "STRING" },
+            character_tokens: { type: "ARRAY", items: { type: "STRING" } },
+            environment_tokens: { type: "ARRAY", items: { type: "STRING" } },
+            camera_directive: { type: "STRING" },
+            image_prompt: { type: "STRING" },
+            transition_to_next: { type: "STRING" },
+            timecodes: {
+                type: "OBJECT",
+                properties: {
+                    start_second: { type: "NUMBER" },
+                    end_second: { type: "NUMBER" }
+                }
+            }
+          }
+        }
+      }
+    },
+    required: ["title", "scenes", "output_settings", "voice_instruction"]
+  };
+
   const systemInstruction = `
-SYSTEM: You are a deterministic content generator. Receive a single short idea and output **ONLY** valid JSON matching the manifest schema below. No explanation, no extra fields, no prose. Use low temperature for determinism.
+SYSTEM: You are a deterministic content generator. Receive a single short idea and output **ONLY** valid JSON matching the schema below. 
 
 CONSTRAINTS (CRITICAL):
-- Output MUST be valid JSON.
+- Output MUST be valid JSON. 
+- Do not output markdown (e.g. \`\`\`json). Just the raw JSON string.
 - Total JSON length MUST be under 30000 characters.
 - title: Max 6 words.
 - final_caption: Max 8 words.
@@ -67,8 +119,9 @@ CONSTRAINTS (CRITICAL):
 - environment_tokens: Max 3 descriptive items (e.g. "cyberpunk city rain", "sunny meadow").
 - Use Google Search to verify facts if the topic is news or factual.
 
-Do not be verbose. Be extremely concise.
-  `;
+JSON SCHEMA:
+${JSON.stringify(schemaDefinition, null, 2)}
+`;
 
   const userPrompt = `
 InputIdea: "${ideaClean}"
@@ -81,56 +134,6 @@ TargetDuration: "${req.durationTier || '30s'}"
 AspectRatio: "${ratioText}"
   `;
 
-  // Schema Definition for Strict JSON
-  const schema = {
-    type: Type.OBJECT,
-    properties: {
-      title: { type: Type.STRING },
-      final_caption: { type: Type.STRING },
-      voice_instruction: {
-        type: Type.OBJECT,
-        properties: {
-          voice: { type: Type.STRING },
-          lang: { type: Type.STRING },
-          tone: { type: Type.STRING }
-        }
-      },
-      output_settings: {
-        type: Type.OBJECT,
-        properties: {
-          video_resolution: { type: Type.STRING },
-          fps: { type: Type.NUMBER },
-          scene_duration_default: { type: Type.NUMBER }
-        }
-      },
-      scenes: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            scene_number: { type: Type.NUMBER },
-            duration_seconds: { type: Type.NUMBER },
-            narration_text: { type: Type.STRING },
-            visual_description: { type: Type.STRING },
-            character_tokens: { type: Type.ARRAY, items: { type: Type.STRING } },
-            environment_tokens: { type: Type.ARRAY, items: { type: Type.STRING } },
-            camera_directive: { type: Type.STRING },
-            image_prompt: { type: Type.STRING },
-            transition_to_next: { type: Type.STRING },
-            timecodes: {
-                type: Type.OBJECT,
-                properties: {
-                    start_second: { type: Type.NUMBER },
-                    end_second: { type: Type.NUMBER }
-                }
-            }
-          }
-        }
-      }
-    },
-    required: ["title", "scenes", "output_settings", "voice_instruction"]
-  };
-
   try {
     // 30 Seconds timeout for story generation
     const response = await withTimeout(ai.models.generateContent({
@@ -138,17 +141,17 @@ AspectRatio: "${ratioText}"
       contents: userPrompt,
       config: {
         systemInstruction: systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: schema,
+        // responseMimeType: "application/json", // DISABLED: Not compatible with tools: [googleSearch]
+        // responseSchema: schema,                // DISABLED: Not compatible with tools: [googleSearch]
         temperature: 0.2,
         maxOutputTokens: 8192,
-        tools: [{ googleSearch: {} }] // Enable Grounding
+        tools: [{ googleSearch: {} }] // Enable Grounding for up-to-date info
       }
     }), 30000, "Script generation timed out. Please try again or select a shorter duration.") as GenerateContentResponse;
 
     let text = response.text || "";
     
-    // Cleanup: Remove markdown code blocks if present (sometimes model adds them despite config)
+    // Cleanup: Remove markdown code blocks if present (sometimes model adds them despite instructions)
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
     if (!text) throw new Error("Empty response from Gemini");
@@ -159,7 +162,6 @@ AspectRatio: "${ratioText}"
         
         // Client-side validation
         if (!manifest.scenes || Math.abs(manifest.scenes.length - targetScenes) > 2) {
-             // We allow a small margin of error (e.g. +/- 2 scenes) but warn
              console.warn(`Manifest has ${manifest.scenes?.length} scenes, expected ${targetScenes}.`);
         }
         
@@ -245,6 +247,7 @@ export const generateSceneImage = async (
     }
 
     // --- GEMINI (Nano Banana or Pro) ---
+    // gemini-2.5-flash-image is Nano Banana, gemini-3-pro-image-preview is Pro
     const geminiModelName = model === 'gemini_pro' ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
