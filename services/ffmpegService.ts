@@ -1,6 +1,5 @@
 
 
-
 export interface VideoScene {
     imageUrl: string;
     text: string;
@@ -185,11 +184,13 @@ export const stitchVideoFrames = async (
 /**
  * Concatenates multiple video URLs into a single video sequence.
  * Uses a hidden video element to play each source sequentially while recording the canvas.
+ * Optional background audio support.
  */
 export const concatenateVideos = async (
     videoUrls: string[],
     targetWidth: number = 1280,
-    targetHeight: number = 720
+    targetHeight: number = 720,
+    backgroundAudioUrl?: string
 ): Promise<string> => {
     console.log(`Starting concatenation of ${videoUrls.length} videos...`);
     
@@ -211,18 +212,33 @@ export const concatenateVideos = async (
             const audioCtx = new AudioContextClass();
             const dest = audioCtx.createMediaStreamDestination();
 
+            // Background Audio Setup
+            let bgSource: AudioBufferSourceNode | null = null;
+            if (backgroundAudioUrl) {
+                try {
+                    const response = await fetch(backgroundAudioUrl);
+                    const buffer = await response.arrayBuffer();
+                    const audioBuffer = await audioCtx.decodeAudioData(buffer);
+                    bgSource = audioCtx.createBufferSource();
+                    bgSource.buffer = audioBuffer;
+                    bgSource.connect(dest);
+                    bgSource.start(0);
+                } catch (e) {
+                    console.warn("Failed to load background audio:", e);
+                }
+            }
+
             // Video Element player
             const video = document.createElement('video');
             video.crossOrigin = 'anonymous';
             video.width = targetWidth;
             video.height = targetHeight;
-            video.muted = false; // We want audio
-            video.volume = 1;
+            video.muted = false; 
+            video.volume = backgroundAudioUrl ? 0.2 : 1; // Lower video volume if bg audio exists
 
             // Connect video audio to destination
             const sourceNode = audioCtx.createMediaElementSource(video);
             sourceNode.connect(dest);
-            // Also connect to speakers if debugging? No, keep it silent for user.
             
             // Setup Recorder
             const canvasStream = canvas.captureStream(30);
@@ -292,6 +308,9 @@ export const concatenateVideos = async (
             }
 
             // Finish
+            if (bgSource) {
+                 try { bgSource.stop(); } catch(e) {}
+            }
             recorder.stop();
 
         } catch (e) {
@@ -299,6 +318,20 @@ export const concatenateVideos = async (
             reject(e);
         }
     });
+};
+
+/**
+ * Merges a video URL with an audio URL.
+ */
+export const mergeVideoAudio = async (
+    videoUrl: string, 
+    audioUrl: string
+): Promise<string> => {
+    console.log("Merging video and audio...");
+    // We reuse concatenateVideos logic but with a single video and background audio
+    // This is cleaner than duplicating logic
+    // We assume standard 16:9 for now, or we could detect.
+    return concatenateVideos([videoUrl], 1280, 720, audioUrl);
 };
 
 /**

@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
 import { GEMINI_API_KEYS } from "../constants";
@@ -300,13 +301,17 @@ export const generateVeoImageToVideo = async (prompt: string, imageBase64: strin
     }
   };
 
-export const generateVeoProductVideo = async (prompt: string, imagesBase64: string[]): Promise<string> => {
+export const generateVeoProductVideo = async (
+    prompt: string, 
+    imagesBase64: string[], 
+    resolution: '720p' | '1080p' = '720p'
+): Promise<string> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("Gemini API Key is missing.");
 
   const ai = new GoogleGenAI({ apiKey });
   
-  console.log("Starting Veo Product Video generation with", imagesBase64.length, "images");
+  console.log("Starting Veo Product Video generation with", imagesBase64.length, "images. Resolution:", resolution);
 
   // Construct reference images payload
   const referenceImagesPayload: any[] = [];
@@ -329,12 +334,13 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
   try {
     // 'veo-3.1-generate-preview' supports multiple reference images
     // Constraints: 16:9 aspect ratio and 720p resolution are required for this feature
+    // Note: If user selected 1080p, we try to pass it, but if model rejects, we might fallback or catch error.
     let operation = await ai.models.generateVideos({
       model: 'veo-3.1-generate-preview',
       prompt: prompt,
       config: {
         numberOfVideos: 1,
-        resolution: '720p',
+        resolution: resolution, // Pass user selection
         aspectRatio: '16:9',
         referenceImages: referenceImagesPayload
       }

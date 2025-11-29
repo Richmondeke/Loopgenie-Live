@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ArrowLeft, Sparkles, Video, Loader2, Wand2, Upload, Plus, Film, Image as ImageIcon, Music, Trash2, Youtube, Play, Pause, AlertCircle, ShoppingBag, Volume2, Maximize, MoreVertical, PenTool, Zap, Download, Save, Coins, Clapperboard, Layers, Settings as SettingsIcon, Type, MousePointer2, Search, X, Headphones, FileAudio, BookOpen, RectangleHorizontal, RectangleVertical, CheckCircle } from 'lucide-react';
 import { Template, HeyGenAvatar, HeyGenVoice, CompositionState, CompositionElement, ElementType, ProjectStatus } from '../types';
@@ -6,7 +7,7 @@ import { generateScriptContent, generateVeoVideo, generateVeoProductVideo, gener
 import { getAvatars, getVoices, generateVideo, checkVideoStatus } from '../services/heygenService';
 import { searchPexels, readFileAsDataURL, StockAsset } from '../services/mockAssetService';
 import { ShortMakerEditor } from './ShortMakerEditor';
-import { stitchVideoFrames, cropVideo, concatenateVideos } from '../services/ffmpegService';
+import { stitchVideoFrames, cropVideo, concatenateVideos, mergeVideoAudio } from '../services/ffmpegService';
 
 interface EditorProps {
   template: Template;
@@ -769,8 +770,13 @@ async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number
 const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => {
     const [images, setImages] = useState<(string | null)[]>([null, null, null]);
     const [prompt, setPrompt] = useState('');
-    const [isAudioEnabled, setIsAudioEnabled] = useState(false);
     const [shotMode, setShotMode] = useState<'SINGLE' | 'MULTI'>('SINGLE');
+    
+    // New States for Resolution and Audio
+    const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
+    const [isAudioEnabled, setIsAudioEnabled] = useState(false);
+    const [audioSource, setAudioSource] = useState<'veo' | 'voiceover'>('veo');
+    const [voiceoverScript, setVoiceoverScript] = useState('');
     
     // Status tracking
     const [status, setStatus] = useState<'idle' | 'analyzing' | 'generating' | 'stitching' | 'completed' | 'error'>('idle');
@@ -806,6 +812,10 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
             setErrorMsg("Please describe the scene.");
             return;
         }
+        if (isAudioEnabled && audioSource === 'voiceover' && !voiceoverScript.trim()) {
+            setErrorMsg("Please enter a script for the voiceover.");
+            return;
+        }
         if (!hasSufficientCredits) {
             setErrorMsg("Insufficient credits.");
             return;
@@ -817,12 +827,37 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
         setIsSaved(false);
 
         try {
+            let finalUri = '';
+            
+            // 1. Prepare Audio (if Voiceover selected)
+            let voiceoverAudioUrl = '';
+            if (isAudioEnabled && audioSource === 'voiceover') {
+                setProgressLabel('Generating Voiceover...');
+                // Using Fenrir (Male) or Kore (Female)
+                voiceoverAudioUrl = await generateSpeech(voiceoverScript, 'Fenrir');
+            }
+
             if (shotMode === 'SINGLE') {
                 // SINGLE SHOT LOGIC
                 setProgressLabel('Generating Video...');
-                const uri = await retryOperation(() => generateVeoProductVideo(prompt, validImages), 3, 3000);
-                setVideoUri(uri);
-                completeGeneration(uri, COST);
+                
+                // If user selected Native Audio, try to hint via prompt (Veo support is experimental/model specific)
+                const fullPrompt = isAudioEnabled && audioSource === 'veo' 
+                    ? `${prompt}. High quality audio sound effects.` 
+                    : prompt;
+
+                const uri = await retryOperation(() => generateVeoProductVideo(fullPrompt, validImages, resolution), 3, 3000);
+                
+                // If we have Voiceover, merge it
+                if (voiceoverAudioUrl) {
+                    setProgressLabel('Merging Voiceover...');
+                    finalUri = await mergeVideoAudio(uri, voiceoverAudioUrl);
+                } else {
+                    finalUri = uri;
+                }
+
+                setVideoUri(finalUri);
+                completeGeneration(finalUri, COST);
 
             } else {
                 // MULTI SHOT LOGIC
@@ -834,7 +869,7 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                 const prompts = await generateProductShotPrompts(mainImage, prompt);
                 console.log("Generated Prompts:", prompts);
 
-                // 2. Generate Videos Sequentially (to avoid rate limits or manage flow)
+                // 2. Generate Videos Sequentially
                 setStatus('generating');
                 const generatedClips: string[] = [];
 
@@ -842,9 +877,8 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                     setProgressLabel(`Generating Shot ${i + 1} of ${prompts.length}...`);
                     
                     try {
-                        // Use robust retry mechanism with exponential backoff
                         const clipUri = await retryOperation(
-                            () => generateVeoProductVideo(prompts[i], validImages),
+                            () => generateVeoProductVideo(prompts[i], validImages, resolution),
                             5, // Max Retries
                             2000 // Initial Delay
                         );
@@ -852,24 +886,21 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                     } catch (e) {
                         console.error(`Failed to generate shot ${i+1} after maximum retries.`, e);
                         
-                        // FAILSAFE: If we have at least one valid clip, reuse it or skip this shot
-                        // This prevents the entire project from failing due to one bad generation
                         if (generatedClips.length > 0) {
                              console.warn(`Falling back: Reusing shot 1 for shot ${i+1}`);
-                             // Clone the first clip as a fallback to ensure we have enough footage
                              generatedClips.push(generatedClips[0]);
                         } else {
-                             // If the VERY first shot fails 5 times, we really can't proceed.
                              throw new Error(`Failed to generate shot ${i+1}. Service might be busy. Please try again later.`);
                         }
                     }
                 }
 
-                // 3. Stitch Videos
+                // 3. Stitch Videos (with optional audio)
                 if (generatedClips.length > 0) {
                     setStatus('stitching');
                     setProgressLabel('Stitching Scenes...');
-                    const finalUri = await concatenateVideos(generatedClips);
+                    // Pass voiceover as background audio if available
+                    finalUri = await concatenateVideos(generatedClips, 1280, 720, voiceoverAudioUrl);
                     setVideoUri(finalUri);
                     completeGeneration(finalUri, COST);
                 } else {
@@ -974,9 +1005,14 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
                             <label className="text-xs font-bold text-gray-400 mb-1 block">Resolution</label>
-                            <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-300 flex justify-between items-center">
-                                <span>720p (Landscape)</span>
-                            </div>
+                            <select 
+                                value={resolution}
+                                onChange={(e) => setResolution(e.target.value as '720p' | '1080p')}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-300 outline-none focus:border-teal-500"
+                            >
+                                <option value="720p">720p (Landscape)</option>
+                                <option value="1080p">1080p (Full HD)</option>
+                            </select>
                         </div>
                         <div>
                             <label className="text-xs font-bold text-gray-400 mb-1 block">Est. Duration</label>
@@ -984,6 +1020,70 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                                 <span>{shotMode === 'MULTI' ? '15-20s' : '5-8s'}</span>
                             </div>
                         </div>
+                    </div>
+
+                    {/* Audio Controls */}
+                    <div className="bg-gray-800/50 rounded-xl p-4 border border-gray-700 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <label className="flex items-center gap-2 text-sm font-medium text-gray-300 cursor-pointer">
+                                <Zap size={14} className={isAudioEnabled ? "text-yellow-400" : "text-gray-500"} />
+                                Generate Audio
+                            </label>
+                            <button 
+                                onClick={() => setIsAudioEnabled(!isAudioEnabled)}
+                                className={`w-10 h-6 rounded-full relative transition-colors ${
+                                    isAudioEnabled ? 'bg-teal-600' : 'bg-gray-700'
+                                }`}
+                            >
+                                <div className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                                    isAudioEnabled ? 'translate-x-4' : 'translate-x-0'
+                                }`} />
+                            </button>
+                        </div>
+
+                        {isAudioEnabled && (
+                            <div className="animate-in slide-in-from-top-2 duration-300 space-y-3 pt-2 border-t border-gray-700/50">
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => setAudioSource('veo')}
+                                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium border transition-all ${
+                                            audioSource === 'veo' 
+                                            ? 'bg-teal-900/40 border-teal-500 text-teal-300' 
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                    >
+                                        Veo 3.1 Audio
+                                    </button>
+                                    <button 
+                                        onClick={() => setAudioSource('voiceover')}
+                                        className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-medium border transition-all ${
+                                            audioSource === 'voiceover' 
+                                            ? 'bg-teal-900/40 border-teal-500 text-teal-300' 
+                                            : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                                        }`}
+                                    >
+                                        Voiceover
+                                    </button>
+                                </div>
+
+                                {audioSource === 'voiceover' && (
+                                    <div>
+                                        <textarea
+                                            value={voiceoverScript}
+                                            onChange={(e) => setVoiceoverScript(e.target.value)}
+                                            placeholder="Enter voiceover script..."
+                                            className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-xs text-white placeholder-gray-500 focus:ring-1 focus:ring-teal-500 outline-none h-20 resize-none"
+                                        />
+                                        <p className="text-[10px] text-gray-500 mt-1">Using 'Fenrir' voice.</p>
+                                    </div>
+                                )}
+                                {audioSource === 'veo' && (
+                                    <p className="text-[10px] text-gray-500">
+                                        Note: Veo audio generation is experimental. Results may vary.
+                                    </p>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     <button
