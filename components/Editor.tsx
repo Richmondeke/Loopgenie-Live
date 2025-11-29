@@ -949,6 +949,8 @@ const TextToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =
     // ... [Previous AI Video Code retained as is] ...
     const [prompt, setPrompt] = useState('');
     const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+    const [videoModel, setVideoModel] = useState('veo-3.1-fast-generate-preview');
+
     const [status, setStatus] = useState<'idle' | 'generating' | 'completed' | 'error'>('idle');
     const [videoUri, setVideoUri] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState('');
@@ -973,7 +975,7 @@ const TextToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =
 
         try {
             // Removed prompting logic
-            const uri = await generateVeoVideo(prompt, aspectRatio);
+            const uri = await generateVeoVideo(prompt, aspectRatio, videoModel);
             setVideoUri(uri);
             setStatus('completed');
             
@@ -1019,6 +1021,17 @@ const TextToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
+                            <label className="text-xs font-bold text-gray-400 mb-1 block">Video Model</label>
+                            <select 
+                                value={videoModel}
+                                onChange={(e) => setVideoModel(e.target.value)}
+                                className="w-full bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-300 outline-none focus:border-purple-500"
+                            >
+                                <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast (1080p)</option>
+                                <option value="veo-3.1-generate-preview">Veo 3.1 Pro (Quality)</option>
+                            </select>
+                        </div>
+                        <div>
                             <label className="text-xs font-bold text-gray-400 mb-1 block">Aspect Ratio</label>
                             <select 
                                 value={aspectRatio}
@@ -1028,12 +1041,6 @@ const TextToVideoEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =
                                 <option value="16:9">16:9 (Landscape)</option>
                                 <option value="9:16">9:16 (Portrait)</option>
                             </select>
-                        </div>
-                        <div>
-                            <label className="text-xs font-bold text-gray-400 mb-1 block">Duration</label>
-                            <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-500 flex justify-between items-center cursor-not-allowed">
-                                <span>~5s (Preview)</span>
-                            </div>
                         </div>
                     </div>
 

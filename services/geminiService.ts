@@ -177,22 +177,26 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
   }
 };
 
-export const generateVeoVideo = async (prompt: string, aspectRatio: '16:9' | '9:16' = '16:9'): Promise<string> => {
+export const generateVeoVideo = async (
+    prompt: string, 
+    aspectRatio: '16:9' | '9:16' = '16:9',
+    model: string = 'veo-3.1-fast-generate-preview'
+): Promise<string> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("Gemini API Key is missing.");
 
   const ai = new GoogleGenAI({ apiKey });
   
-  console.log("Starting Veo generation for:", prompt, aspectRatio);
+  console.log(`Starting Veo generation using ${model}:`, prompt, aspectRatio);
 
   try {
-    // veo-3.1-fast-generate-preview for general text-to-video
     let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-fast-generate-preview',
+        model: model,
         prompt: prompt,
         config: {
             numberOfVideos: 1,
-            resolution: '1080p', // Fast supports 1080p
+            // Pro model supports '1080p' but can handle more complex prompts. Fast is strictly 1080p/720p.
+            resolution: '1080p', 
             aspectRatio: aspectRatio
         }
     });

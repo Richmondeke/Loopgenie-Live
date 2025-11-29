@@ -1,9 +1,9 @@
 
-
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames } from "./ffmpegService";
 import { generateSpeech, getApiKey } from "./geminiService";
+import { generatePollinationsImage } from "./pollinationsService";
 
 // ==========================================
 // 1. GENERATE STORY (Gemini Text)
@@ -187,14 +187,16 @@ AspectRatio: "${ratioText}"
 };
 
 // ==========================================
-// 2. GENERATE IMAGES (Gemini 2.5 Flash Image - Nano Banana)
+// 2. GENERATE IMAGES 
+// Supports: Nano Banana, Flux, Gemini Pro
 // ==========================================
 
 export const generateSceneImage = async (
     scene: ShortMakerScene, 
     globalSeed: string, 
     styleTone?: string,
-    aspectRatio: string = '9:16'
+    aspectRatio: string = '9:16',
+    model: 'nano_banana' | 'flux' | 'gemini_pro' = 'nano_banana'
 ): Promise<string> => {
     
     // Construct sophisticated prompt for consistency and realism
@@ -224,18 +226,33 @@ export const generateSceneImage = async (
         fullPrompt += `, masterpiece, best quality, ultra-detailed, sharp focus`;
     }
 
-    // Add negative-like constraints (Flux handles these via natural language mostly)
+    // Add negative-like constraints
     fullPrompt += `, perfect composition, no text, no distortion.`;
 
+    // --- FLUX (Pollinations) ---
+    if (model === 'flux') {
+        let width = 720;
+        let height = 1280;
+        if (aspectRatio === '16:9') { width = 1280; height = 720; }
+        if (aspectRatio === '1:1') { width = 1024; height = 1024; }
+        if (aspectRatio === '4:3') { width = 1024; height = 768; }
+
+        // Use seed + scene number for variation between scenes but consistency within a project
+        const sceneSeed = globalSeed + scene.scene_number; 
+        return await generatePollinationsImage(fullPrompt, width, height, sceneSeed);
+    }
+
+    // --- GEMINI (Nano Banana or Pro) ---
+    const geminiModelName = model === 'gemini_pro' ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image', // Nano Banana
+            model: geminiModelName,
             contents: { parts: [{ text: fullPrompt }] },
             config: {
                  imageConfig: {
-                    aspectRatio: aspectRatio // "1:1", "3:4", "4:3", "9:16", and "16:9"
+                    aspectRatio: aspectRatio 
                  }
             }
         });
@@ -249,7 +266,7 @@ export const generateSceneImage = async (
         throw new Error("No image data in response");
 
     } catch (e: any) {
-        console.error("Gemini Image Gen Error:", e);
+        console.error(`Gemini Image Gen Error (${model}):`, e);
         if (e.status === 429) {
              throw new Error("Daily AI quota exceeded (Image Generation).");
         }

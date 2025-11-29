@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
 import { getApiKey } from '../services/geminiService';
@@ -15,6 +15,7 @@ interface ShortMakerEditorProps {
 type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'COMPLETE';
 type DurationTier = '15s' | '30s' | '60s';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
+type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
 
 export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
     const isStorybook = template.mode === 'STORYBOOK';
@@ -29,7 +30,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     // New Controls
     const [duration, setDuration] = useState<DurationTier>('30s');
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
-    
+    const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
+
     // Progress Tracking
     const [logs, setLogs] = useState<string[]>([]);
     const [completedImages, setCompletedImages] = useState<number>(0);
@@ -60,7 +62,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         if (!idea.trim()) return;
 
         // API key handling is managed via geminiService and constants.ts
-        // No user prompt required.
         
         setIsProcessing(true);
         setStep('SCRIPT');
@@ -90,7 +91,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             // STEP 2: VISUALS
             setStep('VISUALS');
-            addLog(`🎨 Starting image generation (${aspectRatio})...`);
+            addLog(`🎨 Starting image generation (${aspectRatio}) using ${visualModel}...`);
             
             // We clone the scenes to update them one by one
             const workingScenes = [...storyManifest.scenes];
@@ -110,7 +111,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             workingScenes[i],
                             generationSeed,
                             style,
-                            aspectRatio // Pass selected AR
+                            aspectRatio,
+                            visualModel // Pass selected model
                         );
                         
                         workingScenes[i].generated_image_url = url;
@@ -264,15 +266,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         <option>Sketch</option>
                                     </select>
                                 </div>
+                                
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-300 mb-2">Seed (Optional)</label>
-                                    <input 
-                                        type="text"
-                                        value={seed}
-                                        onChange={(e) => setSeed(e.target.value)}
-                                        placeholder="Random"
+                                    <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+                                        <Aperture size={16} /> Visual Model
+                                    </label>
+                                    <select 
+                                        value={visualModel}
+                                        onChange={(e) => setVisualModel(e.target.value as VisualModel)}
                                         className="w-full bg-black/50 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-white transition-colors"
-                                    />
+                                    >
+                                        <option value="nano_banana">Nano Banana (Default, Fast)</option>
+                                        <option value="flux">Flux (Pollinations - Artistic)</option>
+                                        <option value="gemini_pro">Gemini 3 Pro (High Fidelity)</option>
+                                    </select>
                                 </div>
                             </div>
 
