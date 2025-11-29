@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ArrowLeft, Sparkles, Video, Loader2, Wand2, Upload, Plus, Film, Image as ImageIcon, Music, Trash2, Youtube, Play, Pause, AlertCircle, ShoppingBag, Volume2, Maximize, MoreVertical, PenTool, Zap, Download, Save, Coins, Clapperboard, Layers, Settings as SettingsIcon, Type, MousePointer2, Search, X, Headphones, FileAudio, BookOpen, RectangleHorizontal, RectangleVertical } from 'lucide-react';
+import { ArrowLeft, Sparkles, Video, Loader2, Wand2, Upload, Plus, Film, Image as ImageIcon, Music, Trash2, Youtube, Play, Pause, AlertCircle, ShoppingBag, Volume2, Maximize, MoreVertical, PenTool, Zap, Download, Save, Coins, Clapperboard, Layers, Settings as SettingsIcon, Type, MousePointer2, Search, X, Headphones, FileAudio, BookOpen, RectangleHorizontal, RectangleVertical, CheckCircle } from 'lucide-react';
 import { Template, HeyGenAvatar, HeyGenVoice, CompositionState, CompositionElement, ElementType, ProjectStatus } from '../types';
-import { generateScriptContent, generateVeoVideo, generateVeoProductVideo, generateVeoImageToVideo, generateSpeech } from '../services/geminiService';
+import { generateScriptContent, generateVeoVideo, generateVeoProductVideo, generateVeoImageToVideo, generateSpeech, generateProductShotPrompts } from '../services/geminiService';
 import { getAvatars, getVoices, generateVideo, checkVideoStatus } from '../services/heygenService';
 import { searchPexels, readFileAsDataURL, StockAsset } from '../services/mockAssetService';
 import { ShortMakerEditor } from './ShortMakerEditor';
-import { stitchVideoFrames, cropVideo } from '../services/ffmpegService';
+import { stitchVideoFrames, cropVideo, concatenateVideos } from '../services/ffmpegService';
 
 interface EditorProps {
   template: Template;
@@ -743,22 +743,24 @@ const AudiobookEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => 
     );
 };
 
-// ... Rest of the existing editors (ProductUGCEditor, TextToVideoEditor, ImageToVideoEditor, CompositionEditor, Editor) ...
-
 // ==========================================
-// 4. Product UGC Editor
+// 4. Product UGC Editor (UPDATED for Multi-Shot)
 // ==========================================
 const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => {
-    // ... [Previous UGC Code retained essentially as is, abbreviated for brevity in this response unless changes needed] ...
-    // Note: Re-implementing the previous code here to ensure the XML replacement works correctly.
     const [images, setImages] = useState<(string | null)[]>([null, null, null]);
     const [prompt, setPrompt] = useState('');
     const [isAudioEnabled, setIsAudioEnabled] = useState(false);
-    const [status, setStatus] = useState<'idle' | 'generating' | 'completed' | 'error'>('idle');
+    const [shotMode, setShotMode] = useState<'SINGLE' | 'MULTI'>('SINGLE');
+    
+    // Status tracking
+    const [status, setStatus] = useState<'idle' | 'analyzing' | 'generating' | 'stitching' | 'completed' | 'error'>('idle');
+    const [progressLabel, setProgressLabel] = useState('');
     const [videoUri, setVideoUri] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState('');
     const [isSaved, setIsSaved] = useState(false);
-    const COST = 1;
+    
+    // Cost
+    const COST = shotMode === 'MULTI' ? 3 : 1;
     const hasSufficientCredits = userCredits >= COST;
 
     const handleImageUpload = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -795,21 +797,52 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
         setIsSaved(false);
 
         try {
-            // Removed prompting logic
-            const uri = await generateVeoProductVideo(prompt, validImages);
-            setVideoUri(uri);
-            setStatus('completed');
-            
-            // Auto Save
-            await onGenerate({
-                 isDirectSave: true,
-                 videoUrl: uri,
-                 thumbnailUrl: images.find(i => i !== null) || null,
-                 cost: COST,
-                 type: 'UGC_PRODUCT',
-                 shouldRedirect: false
-            });
-            setIsSaved(true);
+            if (shotMode === 'SINGLE') {
+                // SINGLE SHOT LOGIC
+                setProgressLabel('Generating Video...');
+                const uri = await generateVeoProductVideo(prompt, validImages);
+                setVideoUri(uri);
+                completeGeneration(uri, COST);
+
+            } else {
+                // MULTI SHOT LOGIC
+                setStatus('analyzing');
+                setProgressLabel('Analyzing Product...');
+                
+                // 1. Generate Prompt Storyboard from Gemini
+                const mainImage = validImages[0];
+                const prompts = await generateProductShotPrompts(mainImage, prompt);
+                console.log("Generated Prompts:", prompts);
+
+                // 2. Generate Videos Sequentially (to avoid rate limits or manage flow)
+                setStatus('generating');
+                const generatedClips: string[] = [];
+
+                for (let i = 0; i < prompts.length; i++) {
+                    setProgressLabel(`Generating Shot ${i + 1} of ${prompts.length}...`);
+                    // We reuse generateVeoProductVideo but passing specific prompts
+                    // Note: Ideally we pass the specific prompt + image. 
+                    // The generateVeoProductVideo uses 'veo-3.1-generate-preview' which takes multiple refs.
+                    // We can reuse the same refs or just the main one.
+                    try {
+                        const clipUri = await generateVeoProductVideo(prompts[i], validImages);
+                        generatedClips.push(clipUri);
+                    } catch (e) {
+                        console.warn(`Failed to generate clip ${i+1}`, e);
+                        // Continue if at least one works? Or fail hard?
+                        // Let's fail hard for now to ensure quality
+                        throw new Error(`Failed to generate shot ${i+1}. Please try again.`);
+                    }
+                }
+
+                // 3. Stitch Videos
+                setStatus('stitching');
+                setProgressLabel('Stitching Scenes...');
+                const finalUri = await concatenateVideos(generatedClips);
+                
+                setVideoUri(finalUri);
+                completeGeneration(finalUri, COST);
+            }
 
         } catch (error: any) {
             console.error(error);
@@ -817,6 +850,22 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
             setErrorMsg(error.message || "Failed to generate video.");
         }
     };
+
+    const completeGeneration = async (uri: string, cost: number) => {
+        setStatus('completed');
+        // Auto Save
+        await onGenerate({
+                isDirectSave: true,
+                videoUrl: uri,
+                thumbnailUrl: images.find(i => i !== null) || null,
+                cost: cost,
+                type: 'UGC_PRODUCT',
+                shouldRedirect: false
+        });
+        setIsSaved(true);
+    };
+
+    const isLoading = status !== 'idle' && status !== 'completed' && status !== 'error';
 
     return (
         <div className="h-full bg-black text-white p-4 lg:p-8 overflow-y-auto rounded-xl">
@@ -857,13 +906,35 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                         </div>
                     </div>
 
+                    {/* Mode Selector */}
+                    <div className="bg-gray-800 p-1 rounded-lg flex">
+                        <button
+                            onClick={() => setShotMode('SINGLE')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${
+                                shotMode === 'SINGLE' ? 'bg-teal-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+                            }`}
+                        >
+                            Single Shot (1 Credit)
+                        </button>
+                        <button
+                            onClick={() => setShotMode('MULTI')}
+                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${
+                                shotMode === 'MULTI' ? 'bg-teal-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+                            }`}
+                        >
+                            Multi-Shot (3 Credits)
+                        </button>
+                    </div>
+
                     <div>
                         <label className="text-sm font-medium mb-2 block text-gray-300">Prompt</label>
                         <textarea
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
-                            placeholder="Describe the scene, character actions, camera angles..."
-                            className="w-full bg-gray-800 border border-gray-700 rounded-xl p-3 text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-blue-500 outline-none h-32 resize-none"
+                            placeholder={shotMode === 'MULTI' 
+                                ? "Describe the product and the vibe. We will generate 3 scenes: A 360 view, a usage shot, and a lifestyle shot." 
+                                : "Describe the scene, character actions, camera angles..."}
+                            className="w-full bg-gray-800 border border-gray-700 rounded-xl p-3 text-sm text-white placeholder-gray-500 focus:ring-1 focus:ring-blue-500 outline-none h-24 resize-none"
                         />
                     </div>
 
@@ -871,42 +942,28 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                         <div>
                             <label className="text-xs font-bold text-gray-400 mb-1 block">Resolution</label>
                             <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-300 flex justify-between items-center">
-                                <span>720p</span>
-                                <div className="rotate-90 text-xs">&rsaquo;</div>
+                                <span>720p (Landscape)</span>
                             </div>
                         </div>
                         <div>
-                            <label className="text-xs font-bold text-gray-400 mb-1 block">Duration</label>
+                            <label className="text-xs font-bold text-gray-400 mb-1 block">Est. Duration</label>
                             <div className="bg-gray-800 border border-gray-700 rounded-lg p-2 text-sm text-gray-300 flex justify-between items-center">
-                                <span>8s</span>
-                                <div className="rotate-90 text-xs">&rsaquo;</div>
+                                <span>{shotMode === 'MULTI' ? '15-20s' : '5-8s'}</span>
                             </div>
                         </div>
-                    </div>
-
-                    <div className="bg-gray-800/50 p-3 rounded-xl flex items-center justify-between border border-gray-700">
-                        <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
-                            Generate Audio <Zap size={14} className="text-blue-400 fill-blue-400" />
-                        </div>
-                        <button 
-                            onClick={() => setIsAudioEnabled(!isAudioEnabled)}
-                            className={`w-10 h-5 rounded-full relative transition-colors ${isAudioEnabled ? 'bg-white' : 'bg-gray-600'}`}
-                        >
-                            <div className={`absolute top-1 w-3 h-3 rounded-full bg-black transition-all ${isAudioEnabled ? 'left-6' : 'left-1'}`} />
-                        </button>
                     </div>
 
                     <button
                         onClick={handleGenerate}
-                        disabled={status === 'generating' || images.filter(i => i).length === 0 || !hasSufficientCredits}
+                        disabled={isLoading || images.filter(i => i).length === 0 || !hasSufficientCredits}
                         className={`w-full font-bold text-xl py-4 rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg mt-auto ${
-                            status === 'generating' || images.filter(i => i).length === 0 || !hasSufficientCredits
+                            isLoading || images.filter(i => i).length === 0 || !hasSufficientCredits
                             ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
                             : 'bg-teal-600 hover:bg-teal-500 text-white hover:shadow-teal-500/20'
                         }`}
                     >
-                        {status === 'generating' ? <Loader2 className="animate-spin" /> : <Video size={20} />}
-                        <span>{status === 'generating' ? 'Generating...' : `Generate Video (${COST} Credit)`}</span>
+                        {isLoading ? <Loader2 className="animate-spin" /> : <Video size={20} />}
+                        <span>{isLoading ? (progressLabel || 'Generating...') : `Generate Video (${COST} Credits)`}</span>
                     </button>
                     {errorMsg && <div className="text-red-400 text-xs text-center">{errorMsg}</div>}
                 </div>
@@ -915,8 +972,8 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                     <div className="flex justify-between items-center mb-4">
                         <h2 className="text-gray-200 font-medium">Output Preview</h2>
                         {isSaved && (
-                            <div className="px-3 py-1 bg-green-900/50 text-green-400 text-xs rounded-full border border-green-800">
-                                Saved to Projects
+                            <div className="px-3 py-1 bg-green-900/50 text-green-400 text-xs rounded-full border border-green-800 flex items-center gap-1">
+                                <CheckCircle size={12} /> Saved to Projects
                             </div>
                         )}
                     </div>
@@ -924,10 +981,13 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
                     <div className="flex-1 bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-gray-800">
                         {status === 'completed' && videoUri ? (
                             <video src={videoUri} controls autoPlay loop className="w-full h-full object-contain" />
-                        ) : status === 'generating' ? (
+                        ) : isLoading ? (
                             <div className="text-center">
-                                <Loader2 className="animate-spin text-blue-500 w-12 h-12 mb-4 mx-auto" />
-                                <p className="text-gray-500 font-medium">Generating your masterpiece...</p>
+                                <Loader2 className="animate-spin text-teal-500 w-12 h-12 mb-4 mx-auto" />
+                                <p className="text-gray-500 font-medium">{progressLabel}</p>
+                                <p className="text-gray-600 text-xs mt-2">
+                                    {shotMode === 'MULTI' ? "Multi-shot video generation takes longer (approx 2 mins)." : "Generating..."}
+                                </p>
                             </div>
                         ) : (
                             <div className="text-gray-600 flex flex-col items-center">

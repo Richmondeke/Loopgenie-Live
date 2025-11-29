@@ -1,5 +1,6 @@
 
 
+
 export interface VideoScene {
     imageUrl: string;
     text: string;
@@ -179,6 +180,125 @@ export const stitchVideoFrames = async (
         reject(e);
     }
   });
+};
+
+/**
+ * Concatenates multiple video URLs into a single video sequence.
+ * Uses a hidden video element to play each source sequentially while recording the canvas.
+ */
+export const concatenateVideos = async (
+    videoUrls: string[],
+    targetWidth: number = 1280,
+    targetHeight: number = 720
+): Promise<string> => {
+    console.log(`Starting concatenation of ${videoUrls.length} videos...`);
+    
+    return new Promise(async (resolve, reject) => {
+        const timeoutId = setTimeout(() => reject(new Error("Concatenation timeout")), 120000); // 2 mins
+
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Canvas context failed");
+            
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Audio Context for mixing sound
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            const audioCtx = new AudioContextClass();
+            const dest = audioCtx.createMediaStreamDestination();
+
+            // Video Element player
+            const video = document.createElement('video');
+            video.crossOrigin = 'anonymous';
+            video.width = targetWidth;
+            video.height = targetHeight;
+            video.muted = false; // We want audio
+            video.volume = 1;
+
+            // Connect video audio to destination
+            const sourceNode = audioCtx.createMediaElementSource(video);
+            sourceNode.connect(dest);
+            // Also connect to speakers if debugging? No, keep it silent for user.
+            
+            // Setup Recorder
+            const canvasStream = canvas.captureStream(30);
+            const combinedStream = new MediaStream([
+                ...canvasStream.getVideoTracks(),
+                ...dest.stream.getAudioTracks()
+            ]);
+            
+            let mimeType = 'video/webm';
+            if (MediaRecorder.isTypeSupported('video/webm; codecs=vp9')) mimeType = 'video/webm; codecs=vp9';
+            else if (MediaRecorder.isTypeSupported('video/mp4')) mimeType = 'video/mp4';
+
+            const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 4000000 });
+            const chunks: Blob[] = [];
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+            recorder.onstop = () => {
+                clearTimeout(timeoutId);
+                const blob = new Blob(chunks, { type: mimeType });
+                audioCtx.close();
+                resolve(URL.createObjectURL(blob));
+            };
+
+            recorder.start();
+
+            // Playback Loop
+            for (const url of videoUrls) {
+                await new Promise<void>((resScene, rejScene) => {
+                    video.src = url;
+                    
+                    video.onloadedmetadata = () => {
+                        video.play().catch(rejScene);
+                        // Draw loop
+                        const draw = () => {
+                            if (video.paused || video.ended) return;
+                            
+                            // Aspect ratio fit
+                            const vidRatio = video.videoWidth / video.videoHeight;
+                            const targetRatio = canvas.width / canvas.height;
+                            let renderW, renderH, offsetX, offsetY;
+
+                            if (vidRatio > targetRatio) {
+                                renderH = canvas.height;
+                                renderW = video.videoWidth * (canvas.height / video.videoHeight);
+                                offsetX = (canvas.width - renderW) / 2;
+                                offsetY = 0;
+                            } else {
+                                renderW = canvas.width;
+                                renderH = video.videoHeight * (canvas.width / video.videoWidth);
+                                offsetX = 0;
+                                offsetY = (canvas.height - renderH) / 2;
+                            }
+                            
+                            ctx.fillStyle = '#000';
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+                            ctx.drawImage(video, offsetX, offsetY, renderW, renderH);
+                            requestAnimationFrame(draw);
+                        };
+                        draw();
+                    };
+
+                    video.onended = () => resScene();
+                    video.onerror = (e) => {
+                        console.warn("Error playing segment:", e);
+                        resScene(); // Skip invalid segment
+                    };
+                });
+            }
+
+            // Finish
+            recorder.stop();
+
+        } catch (e) {
+            clearTimeout(timeoutId);
+            reject(e);
+        }
+    });
 };
 
 /**

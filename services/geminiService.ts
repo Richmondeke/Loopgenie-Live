@@ -313,9 +313,8 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
   
   for (const img of imagesBase64) {
     // Dynamically detect MIME type from base64 string
-    // Format is usually: "data:image/png;base64,iVBOR..."
     const match = img.match(/^data:(.+);base64,(.+)$/);
-    const mimeType = match ? match[1] : 'image/jpeg'; // Default to jpeg if parsing fails
+    const mimeType = match ? match[1] : 'image/jpeg';
     const imageBytes = match ? match[2] : (img.split(',')[1] || img);
 
     referenceImagesPayload.push({
@@ -323,12 +322,12 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
         imageBytes: imageBytes,
         mimeType: mimeType,
       },
-      referenceType: 'ASSET', // Use generic ASSET type for reference images
+      referenceType: 'ASSET', // Use generic ASSET type
     });
   }
 
   try {
-    // Note: 'veo-3.1-generate-preview' supports multiple reference images
+    // 'veo-3.1-generate-preview' supports multiple reference images
     // Constraints: 16:9 aspect ratio and 720p resolution are required for this feature
     let operation = await ai.models.generateVideos({
       model: 'veo-3.1-generate-preview',
@@ -365,4 +364,59 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
      }
      throw error;
   }
+};
+
+// NEW: Generate prompts for multi-shot video sequence
+export const generateProductShotPrompts = async (imageBase64: string, userIdea: string): Promise<string[]> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Detect MIME and cleanup
+    const match = imageBase64.match(/^data:(.+);base64,(.+)$/);
+    const mimeType = match ? match[1] : 'image/jpeg';
+    const imageBytes = match ? match[2] : (imageBase64.split(',')[1] || imageBase64);
+
+    const systemInstruction = `
+    You are a professional video director. Your task is to look at a product image and a user idea, then generate 3 distinct video prompts for Google Veo to create a compelling 15-second marketing sequence.
+    
+    The 3 shots should be:
+    1. **Showcase**: A clean, cinematic 360 orbit or pan of the product to show details.
+    2. **Interaction**: A shot showing the product being held, used, or interacted with by a human hand or model (UGC style).
+    3. **Lifestyle/Creative**: A creative shot of the product in a relevant environment (e.g. on a desk, outdoors, in a studio).
+    
+    OUTPUT FORMAT:
+    Return strictly a JSON array of 3 strings. Example:
+    ["Cinematic orbit of a red soda can on a wet table", "A hand picking up the red soda can", "The soda can sitting on a beach towel at sunset"]
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: mimeType, data: imageBytes } },
+                    { text: `User Idea: ${userIdea}. Generate 3 Veo video prompts.` }
+                ]
+            },
+            config: {
+                systemInstruction: systemInstruction,
+                responseMimeType: "application/json"
+            }
+        });
+
+        const text = response.text;
+        if (!text) return ["Cinematic product shot", "Product being used", "Product in environment"];
+
+        const prompts = JSON.parse(text);
+        if (Array.isArray(prompts)) return prompts.slice(0, 3);
+        return [];
+    } catch (e) {
+        console.error("Failed to generate shot prompts", e);
+        return [
+            `Cinematic shot of ${userIdea}`,
+            `Close up detail shot of ${userIdea}`,
+            `Lifestyle shot of ${userIdea}`
+        ];
+    }
 };
