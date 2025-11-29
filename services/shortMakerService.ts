@@ -65,6 +65,7 @@ CONSTRAINTS (CRITICAL):
 - image_prompt: Max 30 words per scene. Focus on visual details of the character and setting.
 - character_tokens: Max 3 descriptive items (e.g. "young boy red cap", "robotic cat").
 - environment_tokens: Max 3 descriptive items (e.g. "cyberpunk city rain", "sunny meadow").
+- Use Google Search to verify facts if the topic is news or factual.
 
 Do not be verbose. Be extremely concise.
   `;
@@ -140,7 +141,8 @@ AspectRatio: "${ratioText}"
         responseMimeType: "application/json",
         responseSchema: schema,
         temperature: 0.2,
-        maxOutputTokens: 8192 
+        maxOutputTokens: 8192,
+        tools: [{ googleSearch: {} }] // Enable Grounding
       }
     }), 30000, "Script generation timed out. Please try again or select a shorter duration.") as GenerateContentResponse;
 
@@ -362,17 +364,20 @@ export const synthesizeAudio = async (
 // ==========================================
 
 export const assembleVideo = async (manifest: ShortMakerManifest): Promise<string> => {
-    // Extract asset URLs from manifest
-    const images = manifest.scenes
-        .map(s => s.generated_image_url)
-        .filter(url => !!url) as string[];
+    // Prepare scenes with both Image URL and Text for captions
+    const scenes = manifest.scenes
+        .filter(s => !!s.generated_image_url)
+        .map(s => ({
+            imageUrl: s.generated_image_url as string,
+            text: s.narration_text || ""
+        }));
         
     const audioUrl = manifest.generated_audio_url;
 
-    if (images.length === 0) {
+    if (scenes.length === 0) {
         throw new Error("No images generated to assemble video");
     }
 
     // Use the FFMPEG service to stitch inputs
-    return await stitchVideoFrames(images, audioUrl);
+    return await stitchVideoFrames(scenes, audioUrl);
 };
