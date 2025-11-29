@@ -58,9 +58,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     
     const runProduction = async () => {
         if (!idea.trim()) return;
-        
-        // Removed UI Key check to force use of default/env key
 
+        // API key handling is managed via geminiService and constants.ts
+        // No user prompt required.
+        
         setIsProcessing(true);
         setStep('SCRIPT');
         setLogs([]);
@@ -186,7 +187,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             const msg = e.message || "Production failed.";
             setErrorMsg(msg);
             addLog(`❌ Critical Error: ${msg}`);
-            // Removed prompt logic here to ensure we only use default key
         } finally {
             setIsProcessing(false);
         }
@@ -511,7 +511,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         ))}
                     </div>
                 </div>
-
             </div>
         </div>
     );

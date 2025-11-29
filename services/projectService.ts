@@ -89,7 +89,7 @@ export const fetchProjects = async (): Promise<Project[]> => {
         return localData.map(mapRowToProject);
     }
 
-    console.error('Error fetching projects:', error.message || error);
+    console.error('Error fetching projects:', JSON.stringify(error));
     return [];
   }
   return data.map(mapRowToProject);
@@ -106,7 +106,8 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
     
     if (fetchError || !profile) {
-        console.error("Error fetching balance for deduction:", fetchError.message || JSON.stringify(fetchError));
+        // Improved logging to avoid [object Object]
+        console.error("Error fetching balance for deduction:", JSON.stringify(fetchError));
         return null; 
     }
 
@@ -125,7 +126,7 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
 
     if (updateError) {
-        console.error("Error updating credits:", updateError.message || JSON.stringify(updateError));
+        console.error("Error updating credits:", JSON.stringify(updateError));
         throw new Error("Failed to deduct credits. Please try again.");
     }
     
@@ -147,7 +148,10 @@ export const addCredits = async (userId: string, amount: number): Promise<number
         .eq('id', userId)
         .single();
     
-    if (fetchError || !profile) return null;
+    if (fetchError || !profile) {
+        console.error("Error fetching profile for adding credits:", JSON.stringify(fetchError));
+        return null;
+    }
 
     const newBalance = profile.credits_balance + amount;
 
@@ -159,7 +163,7 @@ export const addCredits = async (userId: string, amount: number): Promise<number
         .single();
         
     if (updateError) {
-        console.error("Error adding credits:", updateError.message || JSON.stringify(updateError));
+        console.error("Error adding credits:", JSON.stringify(updateError));
         return null;
     }
     
@@ -216,13 +220,13 @@ export const saveProject = async (project: Project) => {
        const retry = await supabase.from('projects').upsert(fallbackPayload);
        
        if (retry.error) {
-          console.error('Error saving project (retry failed):', retry.error);
+          console.error('Error saving project (retry failed):', JSON.stringify(retry.error));
           throw new Error(`Database Error: ${retry.error.message || JSON.stringify(retry.error)}`);
        }
        return;
     }
 
-    console.error('Error saving project:', error.message || JSON.stringify(error));
+    console.error('Error saving project:', JSON.stringify(error));
     // Throw a readable error message
     throw new Error(`Database Error: ${error.message || JSON.stringify(error)}`);
   }
@@ -268,6 +272,6 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
           }
           return;
       }
-      console.error('Error updating project:', error.message || JSON.stringify(error));
+      console.error('Error updating project:', JSON.stringify(error));
   }
 };

@@ -1,15 +1,14 @@
 
-
 import { Template, HeyGenAvatar, HeyGenVoice } from './types';
 
 export const DEFAULT_HEYGEN_API_KEY = 'sk_V2_hgu_kBihe5QbIIG_p27AdJG5h2c4nHiPds9jt5OZvLRVFadb';
 
 // Default Gemini API Keys pool. 
-// The app will rotate through these if the user hasn't provided their own key.
-// Add your hardcoded keys here as strings if process.env is not available in your deployment.
+// The app will use this key if process.env.API_KEY is not set.
+// SECURITY WARNING: This key is exposed in the client bundle.
+// YOU MUST RESTRICT THIS KEY in Google Cloud Console > APIs & Services > Credentials > Application restrictions > HTTP referrers.
 export const GEMINI_API_KEYS: string[] = [
-    "AIzaSyByl6KYOvllm10VlqQkgoT7A4iWMoBiA5k", // Primary Key
-    process.env.API_KEY || "", 
+    "AIzaSyByl6KYOvllm10VlqQkgoT7A4iWMoBiA5k", 
 ];
 
 // We use these as "Featured Avatars" or fallback if API fails

@@ -1,29 +1,28 @@
 
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
 import { GEMINI_API_KEYS } from "../constants";
 
 // Helper to get API Key strictly from env or constants
 export const getApiKey = () => {
-    // 1. Prioritize constants pool (user provided hardcoded key)
-    if (GEMINI_API_KEYS && GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
+    // 1. Try environment variable (Standard practice)
+    if (process.env.API_KEY) return process.env.API_KEY;
+    
+    // 2. Try User provided key from constants (Fallback for demo/client-side apps)
+    if (GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
         return GEMINI_API_KEYS[0];
     }
-
-    // 2. Fallback to environment variable
-    let key = process.env.API_KEY;
-
-    if (!key) {
-        console.warn("API_KEY is missing from environment and constants.");
-    }
-    return key || "";
+    
+    return "";
 };
 
 export const generateScriptContent = async (
   request: ScriptGenerationRequest
 ): Promise<Record<string, string>> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Gemini API Key is missing. Please configure it in constants.ts");
+  
+  const ai = new GoogleGenAI({ apiKey });
 
   // For avatar videos, we really only care about the 'script' variable.
   const schema = {
@@ -125,7 +124,10 @@ function createWavHeader(pcmDataLength: number, sampleRate: number = 24000, numC
 }
 
 export const generateSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Gemini API Key is missing.");
+
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const response = await ai.models.generateContent({
@@ -177,6 +179,8 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
 
 export const generateVeoVideo = async (prompt: string, aspectRatio: '16:9' | '9:16' = '16:9'): Promise<string> => {
   const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Gemini API Key is missing.");
+
   const ai = new GoogleGenAI({ apiKey });
   
   console.log("Starting Veo generation for:", prompt, aspectRatio);
@@ -219,6 +223,8 @@ export const generateVeoVideo = async (prompt: string, aspectRatio: '16:9' | '9:
 
 export const generateVeoImageToVideo = async (prompt: string, imageBase64: string): Promise<string> => {
     const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+
     const ai = new GoogleGenAI({ apiKey });
     
     console.log("Starting Veo Image-to-Video generation");
@@ -267,6 +273,8 @@ export const generateVeoImageToVideo = async (prompt: string, imageBase64: strin
 
 export const generateVeoProductVideo = async (prompt: string, imagesBase64: string[]): Promise<string> => {
   const apiKey = getApiKey();
+  if (!apiKey) throw new Error("Gemini API Key is missing.");
+
   const ai = new GoogleGenAI({ apiKey });
   
   console.log("Starting Veo Product Video generation with", imagesBase64.length, "images");

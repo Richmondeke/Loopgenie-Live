@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -236,7 +237,17 @@ const App: React.FC = () => {
             console.error("Failed to refund credits:", refundError);
         }
 
-        alert(`Generation Failed: ${error.message || "Unknown error"}. \n\nCredits have been refunded.`);
+        // Improved error alert for object errors
+        let msg = error.message;
+        if (!msg && typeof error === 'object') {
+            try {
+                msg = JSON.stringify(error);
+            } catch (e) {
+                msg = "Unknown error occurred";
+            }
+        }
+        
+        alert(`Generation Failed: ${msg}. \n\nCredits have been refunded.`);
     } finally {
         setIsGenerating(false);
     }

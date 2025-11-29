@@ -1,5 +1,4 @@
 
-
 export enum AppView {
   TEMPLATES = 'TEMPLATES',
   PROJECTS = 'PROJECTS',
