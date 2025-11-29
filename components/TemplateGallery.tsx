@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect } from 'react';
 import { User, Loader2, ShoppingBag, Clapperboard, Layers, Sparkles, Headphones, Image as ImageIcon, BookOpen } from 'lucide-react';
 import { Template, HeyGenAvatar } from '../types';
@@ -129,6 +130,17 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
       });
   };
 
+  const handleSelectEditor = () => {
+      onSelectTemplate({
+          id: 'mode_composition',
+          name: 'Composition Editor',
+          category: 'Tools',
+          thumbnailUrl: '',
+          variables: [],
+          mode: 'COMPOSITION'
+      });
+  };
+
   // Helper to filter avatars
   const filteredAvatars = avatars.filter(avatar => {
       if (genderFilter === 'ALL') return true;
@@ -224,7 +236,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         onClick: handleSelectImageToVideo,
         cta: 'Animate'
     },
-    // COMPOSITION EDITOR (Still Beta)
+    // COMPOSITION EDITOR (LIVE)
     {
         id: 'video_editor',
         title: 'Video Editor',
@@ -233,8 +245,8 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         colorClass: 'text-gray-600',
         bgClass: 'bg-gray-900/10',
         imgUrl: 'https://images.unsplash.com/photo-1574717432707-c25c8587a3ea?auto=format&fit=crop&w=800&q=80',
-        status: 'COMING SOON',
-        onClick: () => {}, 
+        status: 'LIVE',
+        onClick: handleSelectEditor, 
         cta: 'Open Editor'
     }
   ];
@@ -344,7 +356,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         {tools.map(tool => (
             <div 
                 key={tool.id}
-                onClick={tool.status === 'COMING SOON' && tool.id === 'video_editor' ? undefined : tool.onClick}
+                onClick={tool.status === 'COMING SOON' ? undefined : tool.onClick}
                 className={`group bg-white rounded-3xl border border-gray-200 shadow-sm transition-all duration-300 flex flex-col relative overflow-hidden ${
                     tool.status === 'LIVE' 
                     ? 'hover:shadow-2xl hover:border-indigo-200 cursor-pointer' 

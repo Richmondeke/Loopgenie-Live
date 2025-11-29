@@ -165,11 +165,3 @@ export interface ShortMakerManifest {
   generated_video_url?: string;
   status?: "created" | "story_ready" | "images_processing" | "audio_processing" | "assembling" | "completed" | "failed";
 }
-
-// Interface for the AI Studio key selection global
-declare global {
-  interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-  }
-}

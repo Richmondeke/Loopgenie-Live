@@ -1,8 +1,8 @@
 
+
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames } from "./ffmpegService";
-import { generatePollinationsImage } from "./pollinationsService";
 import { generateSpeech, getApiKey } from "./geminiService";
 
 // ==========================================
@@ -187,7 +187,7 @@ AspectRatio: "${ratioText}"
 };
 
 // ==========================================
-// 2. GENERATE IMAGES (Pollinations AI)
+// 2. GENERATE IMAGES (Gemini 2.5 Flash Image - Nano Banana)
 // ==========================================
 
 export const generateSceneImage = async (
@@ -227,34 +227,34 @@ export const generateSceneImage = async (
     // Add negative-like constraints (Flux handles these via natural language mostly)
     fullPrompt += `, perfect composition, no text, no distortion.`;
 
-    // Calculate dimensions based on Aspect Ratio
-    let width = 720;
-    let height = 1280;
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-    switch (aspectRatio) {
-        case '16:9':
-            width = 1280;
-            height = 720;
-            break;
-        case '1:1':
-            width = 1024;
-            height = 1024;
-            break;
-        case '4:3':
-            width = 1024;
-            height = 768;
-            break;
-        case '9:16':
-        default:
-            width = 720;
-            height = 1280;
-            break;
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image', // Nano Banana
+            contents: { parts: [{ text: fullPrompt }] },
+            config: {
+                 imageConfig: {
+                    aspectRatio: aspectRatio // "1:1", "3:4", "4:3", "9:16", and "16:9"
+                 }
+            }
+        });
+        
+        // Find the image part
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+             if (part.inlineData) {
+                 return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+             }
+        }
+        throw new Error("No image data in response");
+
+    } catch (e: any) {
+        console.error("Gemini Image Gen Error:", e);
+        if (e.status === 429) {
+             throw new Error("Daily AI quota exceeded (Image Generation).");
+        }
+        throw e;
     }
-
-    // We use globalSeed + scene_number to ensure determinism but variation per scene
-    const seed = `${globalSeed}-${scene.scene_number}`;
-
-    return await generatePollinationsImage(fullPrompt, width, height, seed);
 };
 
 // ==========================================
