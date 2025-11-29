@@ -8,7 +8,7 @@ export const DEFAULT_HEYGEN_API_KEY = 'sk_V2_hgu_kBihe5QbIIG_p27AdJG5h2c4nHiPds9
 // SECURITY WARNING: This key is exposed in the client bundle.
 // YOU MUST RESTRICT THIS KEY in Google Cloud Console > APIs & Services > Credentials > Application restrictions > HTTP referrers.
 export const GEMINI_API_KEYS: string[] = [
-    "AIzaSyByl6KYOvllm10VlqQkgoT7A4iWMoBiA5k", 
+    "AQ.Ab8RN6LC-pwF8UYLkQ9XBSIzQvMRF8OU4r-5qAFrwslIeP-lZA",
 ];
 
 // We use these as "Featured Avatars" or fallback if API fails

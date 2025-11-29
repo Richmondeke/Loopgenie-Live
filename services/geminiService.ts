@@ -3,12 +3,16 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
 import { GEMINI_API_KEYS } from "../constants";
 
-// Helper to get API Key strictly from env or constants
+// Helper to get API Key strictly from env, local storage, or constants
 export const getApiKey = () => {
     // 1. Try environment variable (Standard practice)
     if (process.env.API_KEY) return process.env.API_KEY;
+
+    // 2. Try Local Storage (User entered in Settings)
+    const localKey = localStorage.getItem('genavatar_gemini_key');
+    if (localKey) return localKey;
     
-    // 2. Try User provided key from constants (Fallback for demo/client-side apps)
+    // 3. Try User provided key from constants (Fallback for demo/client-side apps)
     if (GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
         return GEMINI_API_KEYS[0];
     }
@@ -20,7 +24,7 @@ export const generateScriptContent = async (
   request: ScriptGenerationRequest
 ): Promise<Record<string, string>> => {
   const apiKey = getApiKey();
-  if (!apiKey) throw new Error("Gemini API Key is missing. Please configure it in constants.ts");
+  if (!apiKey) throw new Error("Gemini API Key is missing. Please check Settings or constants.ts");
   
   const ai = new GoogleGenAI({ apiKey });
 
@@ -60,6 +64,10 @@ export const generateScriptContent = async (
     return JSON.parse(text);
   } catch (error: any) {
     console.error("Gemini generation error:", error);
+    
+    if (error.status === 403 || error.message?.includes('403') || error.message?.includes('leaked')) {
+        throw new Error("API Key Invalid or Leaked. Please update your Gemini API Key in Settings.");
+    }
     
     // Handle Quota Exceeded (429) specifically
     if (error.status === 429 || (error.message && error.message.includes('429')) || error.message?.includes('RESOURCE_EXHAUSTED')) {
@@ -170,6 +178,9 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
 
   } catch (error: any) {
     console.error("Gemini TTS Error:", error);
+    if (error.status === 403 || error.message?.includes('403')) {
+        throw new Error("API Key Invalid/Leaked. Check Settings.");
+    }
     if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
         throw new Error("Daily AI quota exceeded. Please try again later.");
      }
@@ -218,6 +229,9 @@ export const generateVeoVideo = async (
     // The URI needs the API key appended to be downloadable/playable
     return `${videoUri}&key=${apiKey}`;
   } catch (error: any) {
+     if (error.status === 403 || error.message?.includes('403')) {
+        throw new Error("API Key Invalid/Leaked. Check Settings.");
+     }
      if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
         throw new Error("Daily AI quota exceeded. Please try again later or check your billing.");
      }
@@ -268,6 +282,9 @@ export const generateVeoImageToVideo = async (prompt: string, imageBase64: strin
   
       return `${videoUri}&key=${apiKey}`;
     } catch (error: any) {
+      if (error.status === 403 || error.message?.includes('403')) {
+        throw new Error("API Key Invalid/Leaked. Check Settings.");
+      }
       if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
           throw new Error("Daily AI quota exceeded. Please try again later or check your billing.");
        }
@@ -332,6 +349,9 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
     return `${videoUri}&key=${apiKey}`;
   } catch (error: any) {
     console.error("Veo Product Video Error:", error);
+    if (error.status === 403 || error.message?.includes('403')) {
+        throw new Error("API Key Invalid/Leaked. Check Settings.");
+    }
     if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
         throw new Error("Daily AI quota exceeded. Please try again later or check your billing.");
      }
