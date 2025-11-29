@@ -1,17 +1,18 @@
 
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
 import { GEMINI_API_KEYS } from "../constants";
 
 // Helper to get API Key strictly from env or constants
 export const getApiKey = () => {
-    // 1. Try environment variable
-    let key = process.env.API_KEY;
-    
-    // 2. Fallback to constants pool if env is missing/empty
-    if (!key && GEMINI_API_KEYS && GEMINI_API_KEYS.length > 0) {
-        key = GEMINI_API_KEYS[0];
+    // 1. Prioritize constants pool (user provided hardcoded key)
+    if (GEMINI_API_KEYS && GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
+        return GEMINI_API_KEYS[0];
     }
+
+    // 2. Fallback to environment variable
+    let key = process.env.API_KEY;
 
     if (!key) {
         console.warn("API_KEY is missing from environment and constants.");
@@ -308,6 +309,7 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
     while (!operation.done) {
       await new Promise(resolve => setTimeout(resolve, 5000));
       operation = await ai.operations.getVideosOperation({operation: operation});
+      console.log("Veo polling status:", operation.metadata?.state);
     }
 
     const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
@@ -317,6 +319,7 @@ export const generateVeoProductVideo = async (prompt: string, imagesBase64: stri
 
     return `${videoUri}&key=${apiKey}`;
   } catch (error: any) {
+    console.error("Veo Product Video Error:", error);
     if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
         throw new Error("Daily AI quota exceeded. Please try again later or check your billing.");
      }

@@ -1,4 +1,5 @@
 
+
 import { Template, HeyGenAvatar, HeyGenVoice } from './types';
 
 export const DEFAULT_HEYGEN_API_KEY = 'sk_V2_hgu_kBihe5QbIIG_p27AdJG5h2c4nHiPds9jt5OZvLRVFadb';
@@ -7,9 +8,8 @@ export const DEFAULT_HEYGEN_API_KEY = 'sk_V2_hgu_kBihe5QbIIG_p27AdJG5h2c4nHiPds9
 // The app will rotate through these if the user hasn't provided their own key.
 // Add your hardcoded keys here as strings if process.env is not available in your deployment.
 export const GEMINI_API_KEYS: string[] = [
+    "AIzaSyByl6KYOvllm10VlqQkgoT7A4iWMoBiA5k", // Primary Key
     process.env.API_KEY || "", 
-    // "AIzaSy...YourHardcodedKeyHere...",
-    // "AIzaSy...AnotherKeyHere..."
 ];
 
 // We use these as "Featured Avatars" or fallback if API fails

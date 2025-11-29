@@ -1,4 +1,5 @@
 
+
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
 
@@ -105,7 +106,7 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
     
     if (fetchError || !profile) {
-        console.error("Error fetching balance for deduction:", fetchError);
+        console.error("Error fetching balance for deduction:", fetchError.message || JSON.stringify(fetchError));
         return null; 
     }
 
@@ -124,8 +125,8 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
 
     if (updateError) {
-        console.error("Error updating credits:", updateError);
-        throw updateError;
+        console.error("Error updating credits:", updateError.message || JSON.stringify(updateError));
+        throw new Error("Failed to deduct credits. Please try again.");
     }
     
     // Return the confirmed value from the DB
@@ -158,7 +159,7 @@ export const addCredits = async (userId: string, amount: number): Promise<number
         .single();
         
     if (updateError) {
-        console.error("Error adding credits:", updateError);
+        console.error("Error adding credits:", updateError.message || JSON.stringify(updateError));
         return null;
     }
     
@@ -221,7 +222,7 @@ export const saveProject = async (project: Project) => {
        return;
     }
 
-    console.error('Error saving project:', error);
+    console.error('Error saving project:', error.message || JSON.stringify(error));
     // Throw a readable error message
     throw new Error(`Database Error: ${error.message || JSON.stringify(error)}`);
   }
@@ -267,6 +268,6 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
           }
           return;
       }
-      console.error('Error updating project:', error);
+      console.error('Error updating project:', error.message || JSON.stringify(error));
   }
 };
