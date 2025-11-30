@@ -68,84 +68,88 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
           </button>
         </div>
 
-        {/* Category Tabs */}
-        <div className="flex gap-2 mb-6 overflow-x-auto pb-2 no-scrollbar">
-            {categories.map(cat => (
-                <button
-                    key={cat.id}
-                    onClick={() => setActiveCategory(cat.id as any)}
-                    className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all ${
-                        activeCategory === cat.id 
-                        ? 'bg-gray-900 text-white shadow-md transform scale-105' 
-                        : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
-                    }`}
-                >
-                    {cat.label}
-                </button>
-            ))}
+        {/* Category Tabs - Improved Spacing & Padding */}
+        <div className="w-full mb-8">
+            <div className="flex gap-3 overflow-x-auto pb-4 px-1 no-scrollbar snap-x">
+                {categories.map(cat => (
+                    <button
+                        key={cat.id}
+                        onClick={() => setActiveCategory(cat.id as any)}
+                        className={`px-5 py-2.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border snap-start ${
+                            activeCategory === cat.id 
+                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 border-indigo-600' 
+                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                        }`}
+                    >
+                        {cat.label}
+                    </button>
+                ))}
+            </div>
         </div>
 
         {filteredProjects.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-4">
-              <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
-                  <Clock size={32} />
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-4 bg-gray-50/50">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm border border-gray-100">
+                  <Clock size={32} className="text-gray-300" />
               </div>
-              <p className="font-bold text-gray-500">No projects found</p>
-              <p className="text-sm text-gray-500">
+              <p className="font-bold text-gray-600 text-lg">No projects found</p>
+              <p className="text-sm text-gray-500 mt-1">
                   {activeCategory === 'ALL' 
                     ? "Create your first video from the Templates tab." 
-                    : `No projects in ${activeCategory.toLowerCase()} category.`}
+                    : `No projects in the ${activeCategory.toLowerCase()} category.`}
               </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-10">
+          <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-10 pr-2">
               {filteredProjects.map(project => (
-                  <div key={project.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-4 hover:shadow-md transition-shadow animate-in slide-in-from-bottom-2 duration-300">
-                      <div className="w-32 aspect-video bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 relative group">
+                  <div key={project.id} className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-5 hover:shadow-lg transition-all duration-300 group">
+                      <div className="w-40 aspect-video bg-gray-100 rounded-xl overflow-hidden flex-shrink-0 relative shadow-inner border border-gray-100">
                           <img 
                               src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} 
                               alt="Thumbnail" 
-                              className="w-full h-full object-cover" 
+                              className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" 
                           />
                           {project.status === ProjectStatus.COMPLETED && project.videoUrl && (
                               <button 
                                   onClick={(e) => handleOpenItem(e, project)}
-                                  className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-10 group-hover:bg-opacity-40 transition-all cursor-pointer"
+                                  className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors cursor-pointer"
                               >
-                                  <div className="bg-white/90 rounded-full p-2 shadow-lg transform scale-90 group-hover:scale-100 transition-transform">
+                                  <div className="bg-white/90 rounded-full p-3 shadow-lg transform scale-90 group-hover:scale-100 transition-transform hover:bg-white">
                                      {project.type === 'FASHION_SHOOT' ? (
                                          <ImageIcon className="text-rose-600" size={20} />
                                      ) : (
-                                         <Play className="text-indigo-600 fill-current" size={20}/>
+                                         <Play className="text-indigo-600 fill-current ml-0.5" size={20}/>
                                      )}
                                   </div>
                               </button>
                           )}
                       </div>
                       
-                      <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                              <h3 className="font-bold text-gray-900 truncate">{project.templateName}</h3>
+                      <div className="flex-1 min-w-0 py-1">
+                          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                              <h3 className="font-bold text-gray-900 truncate text-lg">{project.templateName}</h3>
                               <StatusBadge status={project.status} />
                           </div>
-                          <div className="flex items-center gap-2 mb-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{project.type}</span>
-                              <span className="text-xs text-gray-500">• {new Date(project.createdAt).toLocaleDateString()}</span>
+                          <div className="flex items-center gap-3 mb-2 text-sm text-gray-500 font-medium">
+                              <span className="bg-gray-100 px-2 py-0.5 rounded text-gray-600 text-xs uppercase tracking-wide font-bold">{project.type?.replace('_', ' ')}</span>
+                              <span>• {new Date(project.createdAt).toLocaleDateString()}</span>
+                              {project.cost && <span>• {project.cost} Credits</span>}
                           </div>
                           
                           {project.error && (
-                              <div className="text-xs text-red-500 mt-1 truncate max-w-md bg-red-50 px-2 py-1 rounded inline-block" title={project.error}>
-                                  Error: {project.error}
+                              <div className="text-xs text-red-600 mt-2 bg-red-50 border border-red-100 px-3 py-1.5 rounded-lg inline-flex items-center gap-2 max-w-full">
+                                  <AlertOctagon size={12} />
+                                  <span className="truncate">{project.error}</span>
                               </div>
                           )}
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-3 pr-2">
                           {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
                             <>
                                 <button 
                                     onClick={(e) => handleOpenItem(e, project)}
-                                    className="hidden sm:flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors"
+                                    className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm"
                                 >
                                     {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />}
                                     <span>View</span>
@@ -155,17 +159,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     download={`project-${project.id}.${project.type === 'FASHION_SHOOT' ? 'png' : 'mp4'}`}
-                                    className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition-colors"
+                                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all shadow-sm"
                                 >
                                     <Download size={16} />
                                     <span className="hidden sm:inline">Download</span>
                                 </a>
                             </>
                           ) : project.status === ProjectStatus.FAILED ? (
-                             <div className="text-red-500 text-sm font-medium bg-red-50 px-3 py-1 rounded-lg">Failed</div>
+                             <div className="text-red-500 font-medium text-sm bg-red-50 px-4 py-2 rounded-xl border border-red-100">Generation Failed</div>
                           ) : (
-                             <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
-                                  <div className="h-full bg-indigo-500 animate-pulse w-2/3"></div>
+                             <div className="w-32 h-2 bg-gray-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-indigo-500 animate-pulse w-2/3 rounded-full"></div>
                              </div>
                           )}
                       </div>
@@ -177,33 +181,33 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
 
       {/* Media Viewer Modal Overlay */}
       {selectedItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 p-4 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-5xl bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="relative w-full max-w-6xl bg-black rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh] border border-gray-800">
              {/* Header */}
-             <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
-                <h3 className="text-white font-bold text-lg drop-shadow-md">{selectedItem.name}</h3>
+             <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/90 to-transparent pointer-events-none">
+                <h3 className="text-white font-bold text-xl drop-shadow-md pointer-events-auto">{selectedItem.name}</h3>
                 <button 
                   onClick={() => setSelectedItem(null)}
-                  className="bg-black/50 hover:bg-white/20 text-white rounded-full p-2 backdrop-blur-sm transition-colors"
+                  className="bg-black/50 hover:bg-white/20 text-white rounded-full p-2.5 backdrop-blur-md transition-colors border border-white/10 pointer-events-auto"
                 >
                   <X size={24} />
                 </button>
              </div>
 
              {/* Player / Viewer */}
-             <div className="flex-1 bg-black flex items-center justify-center relative">
+             <div className="flex-1 bg-black flex items-center justify-center relative p-4">
                 {selectedItem.type === 'FASHION_SHOOT' ? (
                     <img 
                         src={selectedItem.url} 
                         alt={selectedItem.name}
-                        className="max-w-full max-h-[80vh] w-auto h-auto object-contain"
+                        className="max-w-full max-h-[85vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
                     />
                 ) : (
                     <video 
                       src={selectedItem.url} 
                       controls 
                       autoPlay 
-                      className="max-w-full max-h-[80vh] w-auto h-auto outline-none"
+                      className="max-w-full max-h-[85vh] w-auto h-auto outline-none rounded-lg shadow-2xl"
                     />
                 )}
              </div>

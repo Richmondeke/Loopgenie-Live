@@ -40,7 +40,7 @@ export interface Template {
   variables: TemplateVariable[];
   defaultAvatarId?: string;
   defaultVoiceId?: string;
-  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; // Updated modes
+  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
 }
 
 export interface Project {
@@ -50,7 +50,7 @@ export interface Project {
   thumbnailUrl: string;
   status: ProjectStatus;
   createdAt: number;
-  videoUrl?: string; // This stores the result URL (Video or Image)
+  videoUrl?: string; 
   error?: string;
   type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
   cost?: number; 
@@ -108,7 +108,6 @@ export interface ShortMakerScene {
   image_prompt: string;
   transition_to_next: string;
   timecodes: ShortMakerTimecodes;
-  // Generated Assets
   generated_image_url?: string;
   generated_image_seed?: string;
 }
@@ -122,8 +121,21 @@ export interface ShortMakerManifest {
   voice_instruction: ShortMakerVoiceInstruction;
   output_settings: ShortMakerOutputSettings;
   scenes: ShortMakerScene[];
-  // Generated Assets
   generated_audio_url?: string;
   generated_video_url?: string;
   status?: "created" | "story_ready" | "images_processing" | "audio_processing" | "assembling" | "completed" | "failed";
 }
+
+// --- CENTRALIZED COST CONFIGURATION ---
+// Base assumption: 1 Credit = $0.10 USD
+export const APP_COSTS = {
+    AVATAR_VIDEO: 30,      // Provider: ~$2.00 -> Price: $3.00
+    VEO_FAST: 8,           // Provider: ~$0.50 -> Price: $0.80
+    VEO_PRO: 23,           // Provider: ~$1.50 -> Price: $2.30
+    UGC_MULTI: 24,         // Provider: ~$1.60 -> Price: $2.40
+    FASHION: 2,            // Provider: ~$0.10 -> Price: $0.20
+    AUDIOBOOK: 5,          // Provider: ~$0.30 -> Price: $0.50
+    SHORTS_15S: 5,         // Provider: ~$0.32 -> Price: $0.50
+    SHORTS_30S: 9,         // Provider: ~$0.54 -> Price: $0.90
+    SHORTS_60S: 16         // Provider: ~$1.03 -> Price: $1.60
+};
