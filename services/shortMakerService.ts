@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames } from "./ffmpegService";
-import { generateSpeech, getApiKey } from "./geminiService";
+import { generateSpeech, getApiKey, combineAudioSegments } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
 
 // ==========================================
@@ -291,13 +291,16 @@ export const synthesizeAudio = async (
     // 1. Try Gemini TTS (Free/Built-in) first if no ElevenLabs key or as default
     if (!elevenApiKey) {
         console.log("No ElevenLabs key found, using Gemini TTS...");
-        const fullText = manifest.scenes.map(s => s.narration_text).join(". ");
         
         try {
+            // STRATEGY A: Generate Full Script
+            // This is preferred for smoothness but sometimes fails if text is too long or contains weird chars.
+            const fullText = manifest.scenes.map(s => s.narration_text).join(". ");
+            
             // Add timeout for Gemini TTS as well
             const audioUrl = await withTimeout(
                 generateSpeech(fullText, "Fenrir"), 
-                20000, 
+                25000, 
                 "TTS Generation timed out"
             ); 
             
@@ -306,9 +309,36 @@ export const synthesizeAudio = async (
             const estDuration = Math.max(25, wordCount / 2.5);
             
             return { audioUrl, duration: estDuration };
+
         } catch (e) {
-            console.error("Gemini TTS Failed inside synthesizeAudio", e);
-            throw e; // Bubble up to be caught by runner
+            console.warn("Full TTS failed, switching to segment-based generation...", e);
+            
+            // STRATEGY B: Segment-based (Failsafe)
+            // Generate each sentence individually and stitch them together.
+            // This avoids length limits and timeout issues on the API side.
+            const audioSegments: string[] = [];
+            let totalWords = 0;
+
+            for (const scene of manifest.scenes) {
+                if (!scene.narration_text) continue;
+                totalWords += scene.narration_text.split(' ').length;
+                try {
+                    // Generate clip for this scene
+                    const segUrl = await generateSpeech(scene.narration_text, "Fenrir"); 
+                    audioSegments.push(segUrl);
+                } catch (innerErr) {
+                    console.error(`Failed to generate audio for scene ${scene.scene_number}`, innerErr);
+                    // We continue, just this scene will be silent or skipped in audio stream
+                }
+            }
+            
+            if (audioSegments.length > 0) {
+                // Stitch the WAVs together
+                const combinedUrl = combineAudioSegments(audioSegments);
+                return { audioUrl: combinedUrl, duration: totalWords / 2.5 };
+            }
+            
+            throw new Error("All TTS attempts failed");
         }
     }
 
@@ -355,7 +385,7 @@ export const synthesizeAudio = async (
 
     } catch (error) {
         console.warn("ElevenLabs failed, falling back to Gemini TTS:", error);
-        // Fallback to Gemini
+        // Fallback to Gemini (Full Text attempt)
         const text = manifest.scenes.map(s => s.narration_text).join(". ");
         const url = await withTimeout(generateSpeech(text, "Fenrir"), 20000, "Fallback TTS timed out");
         return { audioUrl: url, duration: 25 };

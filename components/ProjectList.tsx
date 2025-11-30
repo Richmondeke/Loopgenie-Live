@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
 import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon } from 'lucide-react';
@@ -14,12 +13,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
 
   // Filter projects based on category
   const filteredProjects = projects.filter(p => {
-      if (activeCategory === 'ALL') return true;
+      if (activeCategory === 'ALL') return true; // Show everything
       if (activeCategory === 'STORYBOOK') return p.type === 'STORYBOOK';
       if (activeCategory === 'SHORTS') return p.type === 'SHORTS' || p.type === 'UGC_PRODUCT' || p.type === 'TEXT_TO_VIDEO' || p.type === 'IMAGE_TO_VIDEO';
       if (activeCategory === 'AVATAR') return p.type === 'AVATAR' || p.type === 'AUDIOBOOK';
       if (activeCategory === 'FASHION') return p.type === 'FASHION_SHOOT';
-      return true;
+      return false;
   });
 
   // Status Badge Component

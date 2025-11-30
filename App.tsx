@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -183,6 +182,7 @@ const App: React.FC = () => {
             else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
             else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
             else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
+            else if (data.type === 'FASHION_SHOOT') idPrefix = 'fash_';
 
             newProject = {
                 id: `${idPrefix}${Date.now()}`,

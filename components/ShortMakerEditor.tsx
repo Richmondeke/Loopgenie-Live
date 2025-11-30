@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
@@ -281,7 +280,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         className="w-full bg-black/50 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-white transition-colors"
                                     >
                                         <option value="nano_banana">Nano Banana (Default, Fast)</option>
-                                        <option value="flux">Flux (Pollinations - Artistic)</option>
+                                        <option value="flux">Flux (Artistic)</option>
                                         <option value="gemini_pro">Gemini 3 Pro (High Fidelity)</option>
                                     </select>
                                 </div>

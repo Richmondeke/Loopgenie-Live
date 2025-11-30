@@ -1,4 +1,3 @@
-
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
 
@@ -14,6 +13,7 @@ const mapRowToProject = (row: any): Project => {
     else if (idStr.startsWith('aud_')) pType = 'AUDIOBOOK';
     else if (idStr.startsWith('imgv_')) pType = 'IMAGE_TO_VIDEO';
     else if (idStr.startsWith('txtv_')) pType = 'TEXT_TO_VIDEO';
+    else if (idStr.startsWith('fash_')) pType = 'FASHION_SHOOT';
     else pType = 'AVATAR';
   }
 

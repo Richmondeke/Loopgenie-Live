@@ -139,6 +139,58 @@ function createWavHeader(pcmDataLength: number, sampleRate: number = 24000, numC
   return new Uint8Array(buffer);
 }
 
+// Stitches multiple Base64 WAV data URIs into a single WAV Data URI
+export const combineAudioSegments = (audioDataUris: string[]): string => {
+    if (audioDataUris.length === 0) return '';
+    
+    // 1. Decode all and strip headers
+    const pcmChunks: Uint8Array[] = [];
+    let totalPcmLength = 0;
+
+    for (const uri of audioDataUris) {
+        try {
+            const base64 = uri.split(',')[1] || uri;
+            const bytes = base64ToUint8Array(base64);
+            // Strip 44 byte WAV header assuming standard RIFF from Gemini
+            if (bytes.length > 44) {
+                const pcm = bytes.slice(44);
+                pcmChunks.push(pcm);
+                totalPcmLength += pcm.length;
+            }
+        } catch (e) {
+            console.warn("Failed to decode audio segment", e);
+        }
+    }
+
+    if (totalPcmLength === 0) return '';
+
+    // 2. Concatenate PCM data
+    const combinedPcm = new Uint8Array(totalPcmLength);
+    let offset = 0;
+    for (const chunk of pcmChunks) {
+        combinedPcm.set(chunk, offset);
+        offset += chunk.length;
+    }
+
+    // 3. Create New Header
+    // Gemini 2.5 Flash TTS is typically 24kHz mono 16-bit
+    const header = createWavHeader(totalPcmLength, 24000, 1); 
+
+    // 4. Combine Header + PCM
+    const finalBytes = new Uint8Array(header.length + combinedPcm.length);
+    finalBytes.set(header);
+    finalBytes.set(combinedPcm, header.length);
+
+    // 5. Encode to Base64
+    const finalBase64 = btoa(
+        Array.from(finalBytes)
+            .map((byte) => String.fromCharCode(byte))
+            .join('')
+    );
+
+    return `data:audio/wav;base64,${finalBase64}`;
+}
+
 export const generateSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("Gemini API Key is missing.");
