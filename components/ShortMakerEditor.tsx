@@ -4,6 +4,7 @@ import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2,
 import { ShortMakerManifest, ProjectStatus, Template } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
 import { getApiKey } from '../services/geminiService';
+import { uploadToStorage } from '../services/storageService'; // Import Storage Service
 
 interface ShortMakerEditorProps {
     onBack: () => void;
@@ -174,13 +175,30 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             // FINISH & AUTO SAVE
             setStep('COMPLETE');
 
-            addLog("💾 Saving project to library...");
+            addLog("☁️ Uploading to cloud storage...");
+            
             try {
+                // Upload Video
+                const permanentVideoUrl = await uploadToStorage(
+                    finalVideoUrl, 
+                    `${isStorybook ? 'story' : 'short'}.webm`, 
+                    'stories'
+                );
+
+                // Upload Thumbnail (First frame)
+                const thumbUrl = manifestWithAudio.scenes[0].generated_image_url;
+                let permanentThumbUrl = thumbUrl;
+                if (thumbUrl) {
+                    permanentThumbUrl = await uploadToStorage(thumbUrl, 'thumbnail.png', 'thumbnails');
+                }
+
+                addLog("💾 Saving project to library...");
+                
                 // Await saving to ensure we catch any errors (credits, db, etc)
                 await onGenerate({
                     isDirectSave: true,
-                    videoUrl: finalVideoUrl,
-                    thumbnailUrl: manifestWithAudio.scenes[0].generated_image_url,
+                    videoUrl: permanentVideoUrl, // Use the permanent URL
+                    thumbnailUrl: permanentThumbUrl,
                     cost: COST,
                     templateName: (isStorybook ? "Story: " : "Short: ") + manifestWithAudio.title,
                     type: isStorybook ? 'STORYBOOK' : 'SHORTS',
@@ -191,8 +209,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             } catch (saveError) {
                 console.error("Save error:", saveError);
                 addLog("❌ Error saving project. Please check your credits.");
-                // We do NOT set errorMsg here to avoid blocking the video preview, 
-                // but we flag that saving failed.
             }
 
         } catch (e: any) {
@@ -207,7 +223,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
 
     // -------------------------------------------------------------------------
-    // RENDERERS
+    // RENDERERS (Same as before)
     // -------------------------------------------------------------------------
 
     const StepIndicator = ({ current, target, label, icon: Icon }: any) => {
@@ -395,6 +411,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 {step === 'VISUALS' && `Painting scenes... (${completedImages}/${manifest?.scenes?.length || '?'})`}
                                 {step === 'AUDIO' && "Recording voiceover..."}
                                 {step === 'ASSEMBLY' && "Stitching final video..."}
+                                {step === 'COMPLETE' && "Saving to Cloud..."}
                             </span>
                          </div>
                     )}
@@ -530,6 +547,5 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     </div>
                 </div>
             </div>
-        </div>
-    );
+        );
 };

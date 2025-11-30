@@ -10,6 +10,17 @@ interface ProjectListProps {
 
 export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus }) => {
   const [selectedItem, setSelectedItem] = useState<{ url: string; name: string; type: string } | null>(null);
+  const [activeCategory, setActiveCategory] = useState<'ALL' | 'STORYBOOK' | 'SHORTS' | 'AVATAR' | 'FASHION'>('ALL');
+
+  // Filter projects based on category
+  const filteredProjects = projects.filter(p => {
+      if (activeCategory === 'ALL') return true;
+      if (activeCategory === 'STORYBOOK') return p.type === 'STORYBOOK';
+      if (activeCategory === 'SHORTS') return p.type === 'SHORTS' || p.type === 'UGC_PRODUCT' || p.type === 'TEXT_TO_VIDEO' || p.type === 'IMAGE_TO_VIDEO';
+      if (activeCategory === 'AVATAR') return p.type === 'AVATAR' || p.type === 'AUDIOBOOK';
+      if (activeCategory === 'FASHION') return p.type === 'FASHION_SHOOT';
+      return true;
+  });
 
   // Status Badge Component
   const StatusBadge = ({ status }: { status: ProjectStatus }) => {
@@ -32,35 +43,64 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
     }
   };
 
+  const categories = [
+      { id: 'ALL', label: 'All Projects' },
+      { id: 'AVATAR', label: 'Avatars & Audio' },
+      { id: 'SHORTS', label: 'Shorts & Videos' },
+      { id: 'STORYBOOK', label: 'Storybooks' },
+      { id: 'FASHION', label: 'Photoshoots' },
+  ];
+
   return (
     <>
       <div className="h-full flex flex-col">
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <div>
               <h2 className="text-2xl font-bold text-gray-900">My Projects</h2>
               <p className="text-gray-600 font-medium">History of your generated videos and images.</p>
           </div>
           <button 
               onClick={onPollStatus}
-              className="text-gray-600 hover:text-indigo-600 p-2 rounded-full hover:bg-gray-100 transition-colors"
+              className="text-gray-600 hover:text-indigo-600 p-2 rounded-full hover:bg-gray-100 transition-colors self-end sm:self-auto"
               title="Refresh Status"
           >
               <RefreshCw size={20} />
           </button>
         </div>
 
-        {projects.length === 0 ? (
+        {/* Category Tabs */}
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-2 no-scrollbar">
+            {categories.map(cat => (
+                <button
+                    key={cat.id}
+                    onClick={() => setActiveCategory(cat.id as any)}
+                    className={`px-4 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-all ${
+                        activeCategory === cat.id 
+                        ? 'bg-gray-900 text-white shadow-md transform scale-105' 
+                        : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                    }`}
+                >
+                    {cat.label}
+                </button>
+            ))}
+        </div>
+
+        {filteredProjects.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-4">
               <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
                   <Clock size={32} />
               </div>
-              <p className="font-bold text-gray-500">No projects yet</p>
-              <p className="text-sm text-gray-500">Create your first video from the Templates tab.</p>
+              <p className="font-bold text-gray-500">No projects found</p>
+              <p className="text-sm text-gray-500">
+                  {activeCategory === 'ALL' 
+                    ? "Create your first video from the Templates tab." 
+                    : `No projects in ${activeCategory.toLowerCase()} category.`}
+              </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-10">
-              {projects.map(project => (
-                  <div key={project.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+              {filteredProjects.map(project => (
+                  <div key={project.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-center gap-4 hover:shadow-md transition-shadow animate-in slide-in-from-bottom-2 duration-300">
                       <div className="w-32 aspect-video bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 relative group">
                           <img 
                               src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} 
@@ -88,10 +128,13 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                               <h3 className="font-bold text-gray-900 truncate">{project.templateName}</h3>
                               <StatusBadge status={project.status} />
                           </div>
-                          <p className="text-xs text-gray-600 font-medium mb-2">Created {new Date(project.createdAt).toLocaleDateString()}</p>
-                          <div className="text-xs text-gray-500 font-mono truncate">ID: {project.id}</div>
+                          <div className="flex items-center gap-2 mb-2">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{project.type}</span>
+                              <span className="text-xs text-gray-500">• {new Date(project.createdAt).toLocaleDateString()}</span>
+                          </div>
+                          
                           {project.error && (
-                              <div className="text-xs text-red-500 mt-1 truncate max-w-md" title={project.error}>
+                              <div className="text-xs text-red-500 mt-1 truncate max-w-md bg-red-50 px-2 py-1 rounded inline-block" title={project.error}>
                                   Error: {project.error}
                               </div>
                           )}
@@ -119,7 +162,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                                 </a>
                             </>
                           ) : project.status === ProjectStatus.FAILED ? (
-                             <div className="text-red-500 text-sm font-medium">Generation Failed</div>
+                             <div className="text-red-500 text-sm font-medium bg-red-50 px-3 py-1 rounded-lg">Failed</div>
                           ) : (
                              <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
                                   <div className="h-full bg-indigo-500 animate-pulse w-2/3"></div>
