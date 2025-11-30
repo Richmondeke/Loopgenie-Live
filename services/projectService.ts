@@ -18,11 +18,21 @@ const mapRowToProject = (row: any): Project => {
     else pType = 'AVATAR';
   }
 
-  // Robust date parsing: Supabase returns ISO strings, we need timestamp numbers
+  // Robust date parsing
+  // The DB 'created_at' column is int8 (bigint), but might come back as a number or a string representing a number.
+  // It could also be an ISO string if the schema was modified to timestamptz.
   let createdAt = Date.now();
+  
   if (row.created_at) {
-      const parsed = new Date(row.created_at).getTime();
-      if (!isNaN(parsed)) createdAt = parsed;
+      const asNum = Number(row.created_at);
+      if (!isNaN(asNum) && asNum > 0) {
+          // It's a timestamp number (e.g. 1764539352202)
+          createdAt = asNum;
+      } else {
+          // Try parsing as ISO Date string
+          const parsed = new Date(row.created_at).getTime();
+          if (!isNaN(parsed)) createdAt = parsed;
+      }
   }
 
   return {
@@ -82,33 +92,46 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // --- Service Methods ---
 
-// Changed signature to return error for UI handling
 export const fetchProjects = async (): Promise<{ projects: Project[], error?: any }> => {
   if (!isSupabaseConfigured()) {
     const localData = getLocalProjects();
     return { projects: localData.map(mapRowToProject) };
   }
 
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*')
-    .order('created_at', { ascending: false });
+  try {
+      const { data, error } = await supabase
+        .from('projects')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-  if (error) {
-    if (error.code === '42P17') {
-        console.error("🔥 CRITICAL DB ERROR: Infinite Recursion in fetchProjects. Run schema fix.");
-        return { projects: [], error: { code: '42P17', message: "Database Policy Error: Infinite Recursion. Check SCHEMA.md for fix." } };
-    }
-    if (error.code === '42P01') {
-        // Table doesn't exist, fallback to local
-        const localData = getLocalProjects();
-        return { projects: localData.map(mapRowToProject) };
-    }
-    console.error('Error fetching projects:', JSON.stringify(error));
-    return { projects: [], error };
+      if (error) {
+        // Fix for "TypeError: Failed to fetch" (Network Error)
+        if (error.message?.includes('Failed to fetch') || (error.details && typeof error.details === 'string' && error.details.includes('Failed to fetch'))) {
+            console.warn("Supabase unreachable (Network Error). Falling back to local data.");
+            const localData = getLocalProjects();
+            return { projects: localData.map(mapRowToProject) };
+        }
+
+        if (error.code === '42P17') {
+            console.error("🔥 CRITICAL DB ERROR: Infinite Recursion in fetchProjects. Run schema fix.");
+            return { projects: [], error: { code: '42P17', message: "Database Policy Error: Infinite Recursion. Check SCHEMA.md for fix." } };
+        }
+        if (error.code === '42P01') {
+            // Table doesn't exist, fallback to local
+            const localData = getLocalProjects();
+            return { projects: localData.map(mapRowToProject) };
+        }
+        console.error('Error fetching projects:', JSON.stringify(error));
+        return { projects: [], error };
+      }
+      
+      return { projects: data.map(mapRowToProject) };
+  } catch (err) {
+      console.warn("Unexpected error fetching projects:", err);
+      // Fallback to local data on exception (e.g. fetch throw)
+      const localData = getLocalProjects();
+      return { projects: localData.map(mapRowToProject) };
   }
-  
-  return { projects: data.map(mapRowToProject) };
 };
 
 // NEW: Admin function to fetch ALL projects across all users
@@ -132,6 +155,10 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
             .order('created_at', { ascending: false });
 
         if (error) {
+             // Handle Network Error
+             if (error.message?.includes('Failed to fetch')) {
+                 throw new Error("Network Error: Failed to fetch");
+             }
              if (error.code === '42P17') {
                  console.error("🔥 Infinite Recursion in Admin Fetch.");
              }
@@ -146,11 +173,22 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
         adminProjectsCache = { data: mapped, timestamp: Date.now() };
         return mapped;
 
-    } catch (e) {
+    } catch (e: any) {
         console.warn("Fetch Admin Projects Failed (Returning Fallback):", e);
+        
+        // Handle "Failed to fetch" specifically in the catch block if thrown above or by supabase
+        if (e.message?.includes('Failed to fetch') || e.message?.includes('Network Error')) {
+             return []; // Or local projects if appropriate for admin
+        }
+
         // Fallback to basic fetch if join fails
-        const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
-        if (data) return data.map(mapRowToProject);
+        try {
+            const { data, error } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+            if (!error && data) return data.map(mapRowToProject);
+        } catch (innerE) {
+            console.warn("Fallback fetch also failed");
+        }
+        
         return [];
     }
 };
@@ -249,7 +287,8 @@ export const saveProject = async (project: Project) => {
       status: project.status,
       video_url: project.videoUrl,
       error: project.error,
-      created_at: new Date(project.createdAt).toISOString(), // Convert to ISO for DB
+      // FIXED: Send raw number for BigInt column, do NOT convert to ISO String
+      created_at: project.createdAt, 
       project_type: project.type || 'AVATAR',
       cost: project.cost ?? 1
   };

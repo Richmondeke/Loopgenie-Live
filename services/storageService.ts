@@ -35,7 +35,8 @@ export const uploadToStorage = async (
                     if (!res.ok) throw new Error("Failed to fetch remote asset");
                     blobToUpload = await res.blob();
                 } catch (e) {
-                    console.warn("Could not fetch remote URL for storage, saving original link:", e);
+                    console.warn("Could not fetch remote URL for storage proxy, saving original link:", e);
+                    // This is risky if the link expires, but better than crashing if we can't proxy.
                     return blobOrUrl;
                 }
             }
@@ -68,8 +69,8 @@ export const uploadToStorage = async (
 
     } catch (error) {
         console.error("Storage Upload Failed:", error);
-        // Fallback: return the original input if string, or create temp url if blob
-        if (typeof blobOrUrl === 'string') return blobOrUrl;
-        return URL.createObjectURL(blobOrUrl);
+        // CRITICAL: Re-throw error so the UI knows the upload failed.
+        // Returning a temp URL here causes "Project saved" success but the link breaks later.
+        throw error;
     }
 };

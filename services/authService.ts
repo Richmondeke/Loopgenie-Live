@@ -113,6 +113,11 @@ export const getAllProfiles = async (forceRefresh = false): Promise<UserProfile[
             .order('updated_at', { ascending: false }); // Use updated_at which is safe
             
         if (error) {
+             // Handle network failure gracefully
+             if (error.message && error.message.includes('Failed to fetch')) {
+                 console.warn("Network error fetching profiles. Returning fallback data.");
+                 throw new Error("Network Error");
+             }
              if (error.code === '42P17') {
                  console.error("🔥 Infinite Recursion Error in getAllProfiles. Run schema fix.");
              }
@@ -132,8 +137,8 @@ export const getAllProfiles = async (forceRefresh = false): Promise<UserProfile[
         return mapped;
 
     } catch (e) {
-        console.warn("Failed to fetch all profiles (likely permissions):", e);
-        // Fallback mock data if RLS blocks listing all users
+        console.warn("Failed to fetch all profiles (likely permissions or network):", e);
+        // Fallback mock data if RLS blocks listing all users or network fails
         return [
              { id: '1', email: 'admin@demo.com', full_name: 'Admin User', credits_balance: 999, isAdmin: true },
              { id: '2', email: 'user@demo.com', full_name: 'Demo User', credits_balance: 15, isAdmin: false },
