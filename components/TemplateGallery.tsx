@@ -1,7 +1,6 @@
 
-
 import React, { useState, useEffect } from 'react';
-import { User, Loader2, ShoppingBag, Clapperboard, Layers, Sparkles, Headphones, Image as ImageIcon, BookOpen } from 'lucide-react';
+import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera } from 'lucide-react';
 import { Template, HeyGenAvatar } from '../types';
 import { getAvatars } from '../services/heygenService';
 
@@ -130,14 +129,14 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
       });
   };
 
-  const handleSelectEditor = () => {
+  const handleSelectFashionShoot = () => {
       onSelectTemplate({
-          id: 'mode_composition',
-          name: 'Composition Editor',
-          category: 'Tools',
+          id: 'mode_fashion',
+          name: 'Fashion Photoshoot',
+          category: 'AI',
           thumbnailUrl: '',
           variables: [],
-          mode: 'COMPOSITION'
+          mode: 'FASHION_SHOOT'
       });
   };
 
@@ -161,6 +160,18 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         status: 'LIVE',
         onClick: () => setView('AVATAR_SELECT'),
         cta: 'Select Avatar'
+    },
+    {
+        id: 'fashion_shoot',
+        title: 'Fashion Photoshoot',
+        description: 'Generate professional model photos from your merch.',
+        icon: <Camera size={24} />,
+        colorClass: 'text-rose-600',
+        bgClass: 'bg-rose-900/10',
+        imgUrl: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=800&q=80',
+        status: 'LIVE',
+        onClick: handleSelectFashionShoot, 
+        cta: 'Start Shoot'
     },
     {
         id: 'short_maker',
@@ -235,19 +246,6 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         status: 'LIVE',
         onClick: handleSelectImageToVideo,
         cta: 'Animate'
-    },
-    // COMPOSITION EDITOR (LIVE)
-    {
-        id: 'video_editor',
-        title: 'Video Editor',
-        description: 'Professional timeline editor for compositions.',
-        icon: <Layers size={24} />,
-        colorClass: 'text-gray-600',
-        bgClass: 'bg-gray-900/10',
-        imgUrl: 'https://images.unsplash.com/photo-1574717432707-c25c8587a3ea?auto=format&fit=crop&w=800&q=80',
-        status: 'LIVE',
-        onClick: handleSelectEditor, 
-        cta: 'Open Editor'
     }
   ];
 

@@ -3,12 +3,9 @@ import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
 
 // --- Types ---
-// Map DB row to Project type
 const mapRowToProject = (row: any): Project => {
   let pType = row.project_type;
 
-  // Robust fallback: Infer type from ID if column is missing or null
-  // This ensures the app works even if the user hasn't run the latest migration
   if (!pType) {
     const idStr = String(row.id || '');
     if (idStr.startsWith('ugc_')) pType = 'UGC_PRODUCT';
@@ -29,7 +26,9 @@ const mapRowToProject = (row: any): Project => {
     videoUrl: row.video_url,
     error: row.error,
     createdAt: row.created_at || Date.now(),
-    type: pType as 'AVATAR' | 'UGC_PRODUCT'
+    type: pType as 'AVATAR' | 'UGC_PRODUCT',
+    cost: row.cost || 1, // Add cost if available
+    user_email: row.user_email // Add email if available via join
   };
 };
 
@@ -45,10 +44,8 @@ const saveLocalProjects = (projects: any[]) => {
   localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
 };
 
-// Helper to save to local storage (reused in fallback)
 const saveToLocalStorage = (project: Project) => {
     const projects = getLocalProjects();
-    // Check if exists
     const index = projects.findIndex((p: any) => p.id === project.id);
     const row = {
       id: project.id,
@@ -59,7 +56,8 @@ const saveToLocalStorage = (project: Project) => {
       video_url: project.videoUrl,
       error: project.error,
       created_at: project.createdAt,
-      project_type: project.type
+      project_type: project.type,
+      cost: project.cost
     };
 
     if (index >= 0) {
@@ -69,6 +67,10 @@ const saveToLocalStorage = (project: Project) => {
     }
     saveLocalProjects(projects);
 };
+
+// --- Caching ---
+let adminProjectsCache: { data: Project[], timestamp: number } | null = null;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // --- Service Methods ---
 
@@ -84,23 +86,71 @@ export const fetchProjects = async (): Promise<Project[]> => {
     .order('created_at', { ascending: false });
 
   if (error) {
-    // If table is missing (42P01), fall back to local storage gracefully
+    if (error.code === '42P17') {
+        console.error("🔥 CRITICAL DB ERROR: Infinite Recursion in fetchProjects. Run schema fix.");
+    }
     if (error.code === '42P01') {
-        console.warn("Projects table missing in Supabase. Falling back to local storage.");
         const localData = getLocalProjects();
         return localData.map(mapRowToProject);
     }
-
     console.error('Error fetching projects:', JSON.stringify(error));
     return [];
   }
   return data.map(mapRowToProject);
 };
 
+// NEW: Admin function to fetch ALL projects across all users
+export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Project[]> => {
+    if (!forceRefresh && adminProjectsCache && (Date.now() - adminProjectsCache.timestamp < CACHE_TTL)) {
+        return adminProjectsCache.data;
+    }
+
+    if (!isSupabaseConfigured()) {
+        // Return local projects + some mock ones to simulate activity
+        const local = getLocalProjects().map(mapRowToProject);
+        const mocks = [
+            { id: 'mock_1', templateName: 'Viral Short #1', status: 'completed', createdAt: Date.now() - 3600000, type: 'SHORTS', cost: 3, user_email: 'sarah@creative.com' },
+            { id: 'mock_2', templateName: 'Product Ad', status: 'completed', createdAt: Date.now() - 7200000, type: 'UGC_PRODUCT', cost: 3, user_email: 'mike@business.com' },
+            { id: 'mock_3', templateName: 'Storybook', status: 'processing', createdAt: Date.now() - 100000, type: 'STORYBOOK', cost: 2, user_email: 'new@user.com' },
+        ];
+        return [...local, ...mocks] as Project[];
+    }
+
+    try {
+        // Fetch projects joined with profiles to get email
+        // Note: This assumes RLS policies allow admin to read all rows
+        const { data, error } = await supabase
+            .from('projects')
+            .select(`
+                *,
+                profiles:user_id (email)
+            `)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+             if (error.code === '42P17') {
+                 console.error("🔥 Infinite Recursion in Admin Fetch. Please run the fix script in SCHEMA.md");
+             }
+             throw error;
+        }
+
+        const mapped = data.map((row: any) => ({
+            ...mapRowToProject(row),
+            user_email: row.profiles?.email
+        }));
+
+        adminProjectsCache = { data: mapped, timestamp: Date.now() };
+        return mapped;
+
+    } catch (e) {
+        console.warn("Fetch Admin Projects Failed:", e);
+        return [];
+    }
+};
+
 export const deductCredits = async (userId: string, amount: number): Promise<number | null> => {
     if (!isSupabaseConfigured()) return null; 
 
-    // 1. Fetch current balance to ensure we have the latest
     const { data: profile, error: fetchError } = await supabase
         .from('profiles')
         .select('credits_balance')
@@ -108,7 +158,6 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
     
     if (fetchError || !profile) {
-        // Improved logging to avoid [object Object]
         console.error("Error fetching balance for deduction:", JSON.stringify(fetchError));
         return null; 
     }
@@ -119,7 +168,6 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
 
     const newBalance = profile.credits_balance - amount;
 
-    // 2. Perform Update and SELECT the result to confirm persistence
     const { data: updatedProfile, error: updateError } = await supabase
         .from('profiles')
         .update({ credits_balance: newBalance })
@@ -132,7 +180,6 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         throw new Error("Failed to deduct credits. Please try again.");
     }
     
-    // Return the confirmed value from the DB
     return updatedProfile.credits_balance;
 };
 
@@ -143,7 +190,6 @@ export const refundCredits = async (userId: string, amount: number): Promise<num
 export const addCredits = async (userId: string, amount: number): Promise<number | null> => {
     if (!isSupabaseConfigured()) return null;
 
-    // Fetch current to be safe
     const { data: profile, error: fetchError } = await supabase
         .from('profiles')
         .select('credits_balance')
@@ -180,12 +226,10 @@ export const saveProject = async (project: Project) => {
 
   const user = await supabase.auth.getUser();
   if (!user.data.user) {
-      // If authenticating fails or running locally without auth but with configured supabase (edge case)
       saveToLocalStorage(project);
       return; 
   }
 
-  // Ensure template_id is never null
   const templateIdSafe = project.templateId || 'unknown_template';
 
   const payload = {
@@ -198,7 +242,8 @@ export const saveProject = async (project: Project) => {
       video_url: project.videoUrl,
       error: project.error,
       created_at: project.createdAt,
-      project_type: project.type || 'AVATAR'
+      project_type: project.type || 'AVATAR',
+      cost: project.cost // Ensure cost is saved
   };
 
   const { error } = await supabase
@@ -206,30 +251,16 @@ export const saveProject = async (project: Project) => {
     .upsert(payload);
 
   if (error) {
-    // 1. Fallback: Table missing (42P01) -> Save locally
     if (error.code === '42P01') {
-        console.warn("Projects table missing in Supabase. Saving to local storage.");
         saveToLocalStorage(project);
         return;
     }
-
-    // 2. Fallback: Schema mismatch (project_type missing) -> Retry without column
     if (error.code === 'PGRST204' || error.message?.includes('project_type')) {
-       console.warn("Schema mismatch detected: 'project_type' column missing in DB. Saving without it.");
-       
        const { project_type, ...fallbackPayload } = payload;
-       
        const retry = await supabase.from('projects').upsert(fallbackPayload);
-       
-       if (retry.error) {
-          console.error('Error saving project (retry failed):', JSON.stringify(retry.error));
-          throw new Error(`Database Error: ${retry.error.message || JSON.stringify(retry.error)}`);
-       }
+       if (retry.error) throw new Error(`Database Error: ${retry.error.message}`);
        return;
     }
-
-    console.error('Error saving project:', JSON.stringify(error));
-    // Throw a readable error message
     throw new Error(`Database Error: ${error.message || JSON.stringify(error)}`);
   }
 };
@@ -248,7 +279,6 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
     return;
   }
 
-  // Only update fields that exist in the DB schema
   const dbUpdates: any = {};
   if (updates.status) dbUpdates.status = updates.status;
   if (updates.videoUrl) dbUpdates.video_url = updates.videoUrl;
@@ -261,7 +291,6 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
     .eq('id', id);
 
   if (error) {
-      // If table missing, update local
       if (error.code === '42P01') {
           const projects = getLocalProjects();
           const index = projects.findIndex((p: any) => p.id === id);

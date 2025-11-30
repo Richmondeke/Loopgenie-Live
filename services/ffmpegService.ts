@@ -54,8 +54,8 @@ const drawCaptions = (
     const shadowBlur = Math.round(4 * scaleFactor);
     const maxWidth = width - (200 * scaleFactor); // 100px safe zone on each side
 
-    // FONT SETTINGS
-    ctx.font = `600 ${fontSize}px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+    // FONT SETTINGS - Updated to Manrope
+    ctx.font = `600 ${fontSize}px Manrope, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -320,8 +320,6 @@ export const stitchVideoFrames = async (
             }
 
             // Next frame
-            // Using setTimeout instead of requestAnimationFrame to run as fast as possible in background if needed, 
-            // but for MediaRecorder real-time recording, we need roughly 30fps timing.
             setTimeout(() => drawFrame(), 1000 / fps);
         };
 

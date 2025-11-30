@@ -4,7 +4,9 @@ export enum AppView {
   PROJECTS = 'PROJECTS',
   ASSETS = 'ASSETS',
   SETTINGS = 'SETTINGS',
-  HELP = 'HELP'
+  HELP = 'HELP',
+  ADMIN = 'ADMIN',
+  ADMIN_USERS = 'ADMIN_USERS'
 }
 
 export enum ProjectStatus {
@@ -19,6 +21,7 @@ export interface UserProfile {
   email: string;
   full_name?: string;
   credits_balance: number;
+  isAdmin?: boolean;
 }
 
 export interface TemplateVariable {
@@ -37,7 +40,7 @@ export interface Template {
   variables: TemplateVariable[];
   defaultAvatarId?: string;
   defaultVoiceId?: string;
-  mode?: 'AVATAR' | 'COMPOSITION' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; // Distinguish editor modes
+  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; // Updated modes
 }
 
 export interface Project {
@@ -47,10 +50,11 @@ export interface Project {
   thumbnailUrl: string;
   status: ProjectStatus;
   createdAt: number;
-  videoUrl?: string; // This can also store Audio URL for audiobooks
+  videoUrl?: string; // This stores the result URL (Video or Image)
   error?: string;
-  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'COMPOSITION' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; // Track the type of project
-  cost?: number; // Cost in credits
+  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
+  cost?: number; 
+  user_email?: string;
 }
 
 export interface HeyGenAvatar {
@@ -65,54 +69,13 @@ export interface HeyGenVoice {
   name: string;
   language: string;
   gender: 'male' | 'female';
-  previewAudio?: string; // URL to audio sample
+  previewAudio?: string;
 }
 
 export interface ScriptGenerationRequest {
   topic: string;
   tone: string;
   templateVariables: TemplateVariable[];
-}
-
-// --- Composition Editor Types ---
-
-export type ElementType = 'text' | 'image' | 'video' | 'audio' | 'shape';
-
-export interface CompositionElement {
-  id: string;
-  type: ElementType;
-  name: string;
-  track: number; // Vertical stacking order (1 is bottom)
-  startTime: number; // Seconds
-  duration: number; // Seconds
-  
-  // Visual Properties (Percentages 0-100 for responsiveness)
-  x: number; 
-  y: number;
-  width: number;
-  height: number;
-  rotation?: number;
-  opacity?: number;
-  
-  // Content
-  text?: string;
-  src?: string; // For image/video/audio
-  
-  // Style
-  fillColor?: string;
-  fontFamily?: string;
-  fontSize?: number;
-  fontWeight?: string;
-  textAlign?: 'left' | 'center' | 'right';
-  zIndex?: number;
-}
-
-export interface CompositionState {
-  name: string;
-  width: number;
-  height: number;
-  duration: number;
-  elements: CompositionElement[];
 }
 
 // --- ShortMaker Types ---

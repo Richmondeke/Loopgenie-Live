@@ -4,12 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LoopGenie</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap" rel="stylesheet">
     <script src="https://checkout.flutterwave.com/v3.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
         theme: {
           extend: {
+            fontFamily: {
+              sans: ['Manrope', 'sans-serif'],
+            },
             colors: {
               primary: '#6366f1', // Indigo 500
               secondary: '#4f46e5', // Indigo 600
@@ -53,7 +59,7 @@
 }
 </script>
 </head>
-  <body class="bg-background text-gray-900 antialiased h-screen overflow-hidden">
+  <body class="bg-background text-gray-900 antialiased h-screen overflow-hidden font-sans">
     <div id="root" class="h-full"></div>
     <script type="module" src="./index.tsx"></script>
   </body>

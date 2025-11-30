@@ -9,6 +9,7 @@ import { Auth } from './components/Auth';
 import { LandingPage } from './components/LandingPage';
 import { UpdatePassword } from './components/UpdatePassword';
 import { UpgradeModal } from './components/UpgradeModal';
+import { AdminDashboard } from './components/AdminDashboard'; // NEW IMPORT
 import { AppView, Template, Project, ProjectStatus } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
 import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits } from './services/projectService';
@@ -16,7 +17,6 @@ import { signOut, getSession, onAuthStateChange, getUserProfile } from './servic
 import { Menu, Loader2 } from 'lucide-react';
 import { DEFAULT_HEYGEN_API_KEY } from './constants';
 
-// Persist keys in localStorage for convenience
 const STORAGE_KEY_HEYGEN = 'genavatar_heygen_key';
 
 const App: React.FC = () => {
@@ -59,16 +59,13 @@ const App: React.FC = () => {
 
     const { data } = onAuthStateChange((event, session) => {
       console.log("Auth Event:", event);
-      
-      // Handle Password Recovery Flow
       if (event === 'PASSWORD_RECOVERY') {
           setIsRecoveryMode(true);
       }
-
       setSession(session);
       if (session?.user) {
         loadProfile(session.user.id);
-        setAuthView(null); // Clear auth view state when logged in
+        setAuthView(null);
       }
       setAuthLoading(false);
     });
@@ -80,10 +77,8 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Pre-fetch HeyGen Assets (Avatars & Voices) in background once logged in
   useEffect(() => {
     if (session && heyGenKey) {
-        console.log("Pre-fetching HeyGen assets...");
         getAvatars(heyGenKey).catch(e => console.warn("Background avatar fetch failed:", e));
         getVoices(heyGenKey).catch(e => console.warn("Background voice fetch failed:", e));
     }
@@ -103,7 +98,6 @@ const App: React.FC = () => {
 
   const pollStatuses = useCallback(async () => {
     if (!session) return;
-    
     const activeProjects = projects.filter(p => p.status === ProjectStatus.PROCESSING || p.status === ProjectStatus.PENDING);
     if (activeProjects.length === 0) return;
 
@@ -147,9 +141,10 @@ const App: React.FC = () => {
   const handleSignOut = async () => {
       await signOut();
       setSession(null);
+      setUserProfile(null); // Clear profile
       setProjects([]);
       setCurrentView(AppView.TEMPLATES);
-      setAuthView(null); // Go back to Landing Page
+      setAuthView(null);
   };
 
   const handleSelectTemplate = (template: Template) => {
@@ -166,9 +161,7 @@ const App: React.FC = () => {
     
     const cost = data.cost || 1;
     if (userCredits < cost) {
-        // Automatically open upgrade modal if credits are insufficient
         setIsUpgradeModalOpen(true);
-        // We throw so child components know generation was aborted
         throw new Error("Insufficient credits");
     }
 
@@ -184,7 +177,6 @@ const App: React.FC = () => {
 
         let newProject: Project;
         if (data.isDirectSave) {
-            // Generate semantic ID prefix
             let idPrefix = 'ugc_';
             if (data.type === 'STORYBOOK') idPrefix = 'stor_';
             else if (data.type === 'SHORTS') idPrefix = 'short_';
@@ -228,7 +220,6 @@ const App: React.FC = () => {
         setProjects(prev => [newProject, ...prev]);
         
         if (data.shouldRedirect !== false) {
-             console.log("Navigating to projects queue...");
              setSelectedTemplate(null);
              setCurrentView(AppView.PROJECTS);
         }
@@ -245,7 +236,6 @@ const App: React.FC = () => {
             console.error("Failed to refund credits:", refundError);
         }
 
-        // Improved error alert for object errors
         let msg = error.message;
         if (!msg && typeof error === 'object') {
             try {
@@ -256,8 +246,6 @@ const App: React.FC = () => {
         }
         
         alert(`Generation Failed: ${msg}. \n\nCredits have been refunded.`);
-        
-        // Critical: Re-throw error so child components (Editor) know it failed
         throw error;
     } finally {
         setIsGenerating(false);
@@ -279,8 +267,6 @@ const App: React.FC = () => {
   };
 
   const renderContent = () => {
-    // If we have a selected template AND the current view is TEMPLATES, show editor.
-    // This ensures that switching currentView to PROJECTS will unmount the editor.
     if (selectedTemplate && currentView === AppView.TEMPLATES) {
         return (
             <Editor 
@@ -305,6 +291,10 @@ const App: React.FC = () => {
         );
       case AppView.PROJECTS:
         return <ProjectList projects={projects} onPollStatus={pollStatuses} />;
+      case AppView.ADMIN:
+        return <AdminDashboard initialTab="OVERVIEW" />;
+      case AppView.ADMIN_USERS:
+        return <AdminDashboard initialTab="USERS" />;
       case AppView.SETTINGS:
         return (
             <Settings 
@@ -342,7 +332,6 @@ const App: React.FC = () => {
         currentView={currentView} 
         onChangeView={(view) => {
             setCurrentView(view);
-            // If we navigate away from Templates, clear selection to ensure Editor unmounts
             if (view !== AppView.TEMPLATES) {
                 setSelectedTemplate(null);
             }
@@ -354,6 +343,7 @@ const App: React.FC = () => {
         onSignOut={handleSignOut}
         credits={userCredits}
         onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
+        isAdmin={userProfile?.isAdmin} // Pass admin status to sidebar
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative">
@@ -368,7 +358,6 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Upgrade Modal Overlay */}
       {isUpgradeModalOpen && (
         <UpgradeModal 
             onClose={() => setIsUpgradeModalOpen(false)}

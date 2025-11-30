@@ -1,5 +1,4 @@
 
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
 import { GEMINI_API_KEYS } from "../constants";
@@ -195,6 +194,63 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
      }
      throw error;
   }
+};
+
+// --- Fashion Photoshoot Generator ---
+export const generateFashionImage = async (
+    merchImageBase64: string, 
+    setting: string, 
+    modelDescription: string
+): Promise<string> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Detect MIME type
+    const match = merchImageBase64.match(/^data:(.+);base64,(.+)$/);
+    const mimeType = match ? match[1] : 'image/jpeg';
+    const imageBytes = match ? match[2] : (merchImageBase64.split(',')[1] || merchImageBase64);
+
+    const prompt = `
+    Professional high-fashion photography.
+    Task: Generate a realistic image of a ${modelDescription} model wearing the clothing item shown in the input image.
+    Setting: ${setting}.
+    Style: 8k resolution, photorealistic, cinematic lighting, Vogue magazine quality.
+    Important: Maintain the texture, logo, and color of the input clothing item as accurately as possible. Blend it naturally onto the model.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-image-preview', // High quality image model
+            contents: {
+                parts: [
+                    { inlineData: { mimeType, data: imageBytes } },
+                    { text: prompt }
+                ]
+            },
+            config: {
+                imageConfig: {
+                    aspectRatio: "3:4", // Portrait fashion standard
+                    imageSize: "1K"
+                }
+            }
+        });
+
+        // Find image part
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+        }
+        throw new Error("No image generated.");
+
+    } catch (e: any) {
+        console.error("Fashion Generation Error:", e);
+        if (e.status === 403 || e.message?.includes('403')) {
+            throw new Error("API Key Invalid/Leaked. Check Settings.");
+        }
+        throw e;
+    }
 };
 
 export const generateVeoVideo = async (

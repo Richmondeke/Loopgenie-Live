@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle } from 'lucide-react';
+import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle, ShieldCheck, Users } from 'lucide-react';
 import { AppView } from '../types';
 
 interface SidebarProps {
@@ -11,6 +11,7 @@ interface SidebarProps {
   onSignOut?: () => void;
   credits: number;
   onOpenUpgrade: () => void;
+  isAdmin?: boolean; // NEW PROP
 }
 
 const NavItem: React.FC<{
@@ -19,7 +20,8 @@ const NavItem: React.FC<{
   icon: React.ReactNode;
   label: string;
   onClick: (v: AppView) => void;
-}> = ({ view, current, icon, label, onClick }) => {
+  extraClass?: string;
+}> = ({ view, current, icon, label, onClick, extraClass }) => {
   const isActive = view === current;
   return (
     <button
@@ -28,7 +30,7 @@ const NavItem: React.FC<{
         isActive
           ? 'bg-indigo-50 text-indigo-700'
           : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-      }`}
+      } ${extraClass || ''}`}
     >
       {React.cloneElement(icon as React.ReactElement, { size: 20 })}
       <span>{label}</span>
@@ -36,7 +38,7 @@ const NavItem: React.FC<{
   );
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOpen, toggleMobileMenu, onSignOut, credits, onOpenUpgrade }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOpen, toggleMobileMenu, onSignOut, credits, onOpenUpgrade, isAdmin }) => {
   return (
     <>
        {/* Mobile Overlay */}
@@ -84,6 +86,30 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
             label="My Projects"
             onClick={onChangeView}
           />
+
+          {isAdmin && (
+            <>
+              <div className="text-xs font-bold text-purple-600 uppercase tracking-wider mb-2 px-4 mt-6">
+                Admin
+              </div>
+              <NavItem
+                view={AppView.ADMIN}
+                current={currentView}
+                icon={<ShieldCheck className="text-purple-600" />}
+                label="Dashboard"
+                onClick={onChangeView}
+                extraClass="bg-purple-50 hover:bg-purple-100 border border-purple-100"
+              />
+              <NavItem
+                view={AppView.ADMIN_USERS}
+                current={currentView}
+                icon={<Users className="text-purple-600" />}
+                label="Users & Credits"
+                onClick={onChangeView}
+                extraClass="bg-purple-50 hover:bg-purple-100 border border-purple-100 mt-1"
+              />
+            </>
+          )}
 
           <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 px-4 mt-6">
             System

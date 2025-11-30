@@ -1,5 +1,6 @@
+
 import React, { useState } from 'react';
-import { Video, Sparkles, Zap, Mic, Users, ArrowRight, CheckCircle, Smartphone, ChevronDown, ChevronUp, Layout } from 'lucide-react';
+import { Video, Sparkles, Zap, Mic, Users, ArrowRight, CheckCircle, Smartphone, ChevronDown, ChevronUp, Camera } from 'lucide-react';
 
 interface LandingPageProps {
   onLogin: () => void;
@@ -103,14 +104,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onSignup }) =
                         title="Product UGC"
                         description="Turn static product images into dynamic video ads for social media."
                         color="bg-orange-50"
-                        status="BETA"
+                        status="LIVE"
                     />
                     <FeatureCard 
                         icon={<Smartphone className="text-pink-600" size={24} />}
                         title="ShortMaker"
                         description="Idea to fully edited YouTube Short with scripts, visuals, and voiceovers."
                         color="bg-pink-50"
-                        status="BETA"
+                        status="LIVE"
                     />
                     <FeatureCard 
                         icon={<Mic className="text-green-600" size={24} />}
@@ -120,11 +121,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onSignup }) =
                         status="LIVE"
                     />
                     <FeatureCard 
-                        icon={<Layout className="text-indigo-600" size={24} />}
-                        title="Video Editor"
-                        description="A drag-and-drop timeline editor to compose text, images, and video layers."
-                        color="bg-indigo-50"
-                        status="COMING SOON"
+                        icon={<Camera className="text-rose-600" size={24} />}
+                        title="Fashion Photoshoot"
+                        description="Professional model photography for your merch with customizable settings."
+                        color="bg-rose-50"
+                        status="NEW"
                     />
                 </div>
             </div>
@@ -197,12 +198,13 @@ const FeatureCard: React.FC<{
     title: string, 
     description: string, 
     color: string, 
-    status: 'LIVE' | 'BETA' | 'COMING SOON'
+    status: 'LIVE' | 'BETA' | 'COMING SOON' | 'NEW'
 }> = ({icon, title, description, color, status}) => (
     <div className="bg-white p-8 rounded-2xl border border-gray-100 hover:border-indigo-100 hover:shadow-xl transition-all duration-300 group cursor-default relative overflow-hidden">
         <div className={`absolute top-4 right-4 text-[10px] font-bold px-2 py-1 rounded-full border ${
             status === 'LIVE' ? 'bg-green-50 text-green-700 border-green-100' : 
             status === 'BETA' ? 'bg-orange-50 text-orange-700 border-orange-100' :
+            status === 'NEW' ? 'bg-rose-50 text-rose-700 border-rose-100' :
             'bg-gray-50 text-gray-600 border-gray-100'
         }`}>
             {status}
