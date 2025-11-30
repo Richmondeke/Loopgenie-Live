@@ -66,7 +66,20 @@ If you prefer to set up your Supabase database manually using the Table Editor, 
 
 ---
 
-## 3. 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
+## 3. 🚨 Emergency Fix: Missing 'cost' Column
+**If you get "Could not find the 'cost' column" error, run this:**
+
+```sql
+ALTER TABLE public.projects 
+ADD COLUMN IF NOT EXISTS cost INTEGER DEFAULT 1;
+
+-- Refresh schema cache
+NOTIFY pgrst, 'reload schema';
+```
+
+---
+
+## 4. 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
 **Run this SCRIPT if you see "infinite recursion detected in policy" errors.**
 
 ```sql
@@ -102,7 +115,7 @@ USING ( public.check_is_admin() = true );
 
 ---
 
-## 4. "Fix Everything" / Full Setup Script
+## 5. "Fix Everything" / Full Setup Script
 **Run this to fully reset/setup the database with correct structure.**
 
 ```sql
@@ -137,6 +150,9 @@ create table if not exists public.projects (
   project_type text default 'AVATAR',
   cost int default 1
 );
+
+-- Ensure columns exist
+alter table public.projects add column if not exists cost int default 1;
 
 -- 3. Enable RLS
 alter table public.profiles enable row level security;
@@ -218,4 +234,3 @@ on delete cascade;
 update public.profiles
 set is_admin = true
 where email = 'richmondeke@gmail.com';
-```

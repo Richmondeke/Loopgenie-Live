@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
-import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink } from 'lucide-react';
+import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon } from 'lucide-react';
 
 interface ProjectListProps {
   projects: Project[];
@@ -9,7 +9,7 @@ interface ProjectListProps {
 }
 
 export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus }) => {
-  const [selectedVideo, setSelectedVideo] = useState<{ url: string; name: string } | null>(null);
+  const [selectedItem, setSelectedItem] = useState<{ url: string; name: string; type: string } | null>(null);
 
   // Status Badge Component
   const StatusBadge = ({ status }: { status: ProjectStatus }) => {
@@ -25,10 +25,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
     }
   };
 
-  const handleOpenVideo = (e: React.MouseEvent, project: Project) => {
+  const handleOpenItem = (e: React.MouseEvent, project: Project) => {
     e.preventDefault();
     if (project.videoUrl) {
-      setSelectedVideo({ url: project.videoUrl, name: project.templateName });
+      setSelectedItem({ url: project.videoUrl, name: project.templateName, type: project.type || 'VIDEO' });
     }
   };
 
@@ -38,7 +38,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
         <div className="flex justify-between items-center mb-6">
           <div>
               <h2 className="text-2xl font-bold text-gray-900">My Projects</h2>
-              <p className="text-gray-600 font-medium">History of your generated videos.</p>
+              <p className="text-gray-600 font-medium">History of your generated videos and images.</p>
           </div>
           <button 
               onClick={onPollStatus}
@@ -69,11 +69,15 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                           />
                           {project.status === ProjectStatus.COMPLETED && project.videoUrl && (
                               <button 
-                                  onClick={(e) => handleOpenVideo(e, project)}
+                                  onClick={(e) => handleOpenItem(e, project)}
                                   className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-10 group-hover:bg-opacity-40 transition-all cursor-pointer"
                               >
                                   <div className="bg-white/90 rounded-full p-2 shadow-lg transform scale-90 group-hover:scale-100 transition-transform">
-                                     <Play className="text-indigo-600 fill-current" size={20}/>
+                                     {project.type === 'FASHION_SHOOT' ? (
+                                         <ImageIcon className="text-rose-600" size={20} />
+                                     ) : (
+                                         <Play className="text-indigo-600 fill-current" size={20}/>
+                                     )}
                                   </div>
                               </button>
                           )}
@@ -97,17 +101,17 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                           {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
                             <>
                                 <button 
-                                    onClick={(e) => handleOpenVideo(e, project)}
+                                    onClick={(e) => handleOpenItem(e, project)}
                                     className="hidden sm:flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 transition-colors"
                                 >
-                                    <Play size={16} />
-                                    <span>Watch</span>
+                                    {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />}
+                                    <span>View</span>
                                 </button>
                                 <a 
                                     href={project.videoUrl} 
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    download={`video-${project.id}.mp4`}
+                                    download={`project-${project.id}.${project.type === 'FASHION_SHOOT' ? 'png' : 'mp4'}`}
                                     className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 transition-colors"
                                 >
                                     <Download size={16} />
@@ -128,29 +132,37 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
         )}
       </div>
 
-      {/* Video Modal Overlay */}
-      {selectedVideo && (
+      {/* Media Viewer Modal Overlay */}
+      {selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 p-4 animate-in fade-in duration-200">
           <div className="relative w-full max-w-5xl bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
              {/* Header */}
              <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
-                <h3 className="text-white font-bold text-lg drop-shadow-md">{selectedVideo.name}</h3>
+                <h3 className="text-white font-bold text-lg drop-shadow-md">{selectedItem.name}</h3>
                 <button 
-                  onClick={() => setSelectedVideo(null)}
+                  onClick={() => setSelectedItem(null)}
                   className="bg-black/50 hover:bg-white/20 text-white rounded-full p-2 backdrop-blur-sm transition-colors"
                 >
                   <X size={24} />
                 </button>
              </div>
 
-             {/* Player */}
-             <div className="flex-1 bg-black flex items-center justify-center">
-                <video 
-                  src={selectedVideo.url} 
-                  controls 
-                  autoPlay 
-                  className="max-w-full max-h-[80vh] w-auto h-auto outline-none"
-                />
+             {/* Player / Viewer */}
+             <div className="flex-1 bg-black flex items-center justify-center relative">
+                {selectedItem.type === 'FASHION_SHOOT' ? (
+                    <img 
+                        src={selectedItem.url} 
+                        alt={selectedItem.name}
+                        className="max-w-full max-h-[80vh] w-auto h-auto object-contain"
+                    />
+                ) : (
+                    <video 
+                      src={selectedItem.url} 
+                      controls 
+                      autoPlay 
+                      className="max-w-full max-h-[80vh] w-auto h-auto outline-none"
+                    />
+                )}
              </div>
           </div>
         </div>

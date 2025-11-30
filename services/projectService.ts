@@ -26,7 +26,7 @@ const mapRowToProject = (row: any): Project => {
     videoUrl: row.video_url,
     error: row.error,
     createdAt: row.created_at || Date.now(),
-    type: pType as 'AVATAR' | 'UGC_PRODUCT',
+    type: pType as 'AVATAR' | 'UGC_PRODUCT' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_VIDEO',
     cost: row.cost || 1, // Add cost if available
     user_email: row.user_email // Add email if available via join
   };
@@ -255,6 +255,15 @@ export const saveProject = async (project: Project) => {
         saveToLocalStorage(project);
         return;
     }
+    // FALLBACK: If 'cost' column missing, try saving without it
+    if (error.message?.includes('cost') || error.code === 'PGRST204') {
+        console.warn("⚠️ Database missing 'cost' column. Retrying save without cost tracking...");
+        const { cost, ...safePayload } = payload;
+        const retry = await supabase.from('projects').upsert(safePayload);
+        if (retry.error) throw new Error(`Database Error (Retry Failed): ${retry.error.message}`);
+        return;
+    }
+
     if (error.code === 'PGRST204' || error.message?.includes('project_type')) {
        const { project_type, ...fallbackPayload } = payload;
        const retry = await supabase.from('projects').upsert(fallbackPayload);
