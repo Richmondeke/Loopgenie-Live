@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
 import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon } from 'lucide-react';
@@ -10,6 +11,7 @@ interface ProjectListProps {
 export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus }) => {
   const [selectedItem, setSelectedItem] = useState<{ url: string; name: string; type: string } | null>(null);
   const [activeCategory, setActiveCategory] = useState<'ALL' | 'STORYBOOK' | 'SHORTS' | 'AVATAR' | 'FASHION'>('ALL');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Filter projects based on category
   const filteredProjects = projects.filter(p => {
@@ -42,6 +44,12 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
     }
   };
 
+  const handleRefresh = async () => {
+      setIsRefreshing(true);
+      await onPollStatus();
+      setTimeout(() => setIsRefreshing(false), 800); // Visual feedback min duration
+  };
+
   const categories = [
       { id: 'ALL', label: 'All Projects' },
       { id: 'AVATAR', label: 'Avatars & Audio' },
@@ -59,15 +67,15 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
               <p className="text-gray-600 font-medium">History of your generated videos and images.</p>
           </div>
           <button 
-              onClick={onPollStatus}
-              className="text-gray-600 hover:text-indigo-600 p-2 rounded-full hover:bg-gray-100 transition-colors self-end sm:self-auto"
-              title="Refresh Status"
+              onClick={handleRefresh}
+              className={`text-gray-600 hover:text-indigo-600 p-2 rounded-full hover:bg-gray-100 transition-colors self-end sm:self-auto ${isRefreshing ? 'animate-spin text-indigo-600 bg-indigo-50' : ''}`}
+              title="Refresh Projects"
           >
               <RefreshCw size={20} />
           </button>
         </div>
 
-        {/* Category Tabs - Improved Spacing & Padding */}
+        {/* Category Tabs */}
         <div className="w-full mb-8">
             <div className="flex gap-3 overflow-x-auto pb-4 px-1 no-scrollbar snap-x">
                 {categories.map(cat => (
@@ -97,6 +105,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                     ? "Create your first video from the Templates tab." 
                     : `No projects in the ${activeCategory.toLowerCase()} category.`}
               </p>
+              <button onClick={handleRefresh} className="mt-4 text-indigo-600 font-bold text-sm hover:underline">
+                  Refresh List
+              </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-10 pr-2">

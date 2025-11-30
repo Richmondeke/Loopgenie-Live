@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -8,12 +9,12 @@ import { Auth } from './components/Auth';
 import { LandingPage } from './components/LandingPage';
 import { UpdatePassword } from './components/UpdatePassword';
 import { UpgradeModal } from './components/UpgradeModal';
-import { AdminDashboard } from './components/AdminDashboard'; // NEW IMPORT
+import { AdminDashboard } from './components/AdminDashboard';
 import { AppView, Template, Project, ProjectStatus } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
 import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits } from './services/projectService';
 import { signOut, getSession, onAuthStateChange, getUserProfile } from './services/authService';
-import { Menu, Loader2 } from 'lucide-react';
+import { Menu, Loader2, AlertTriangle } from 'lucide-react';
 import { DEFAULT_HEYGEN_API_KEY } from './constants';
 
 const STORAGE_KEY_HEYGEN = 'genavatar_heygen_key';
@@ -38,6 +39,7 @@ const App: React.FC = () => {
   
   const [heyGenKey, setHeyGenKey] = useState(localStorage.getItem(STORAGE_KEY_HEYGEN) || DEFAULT_HEYGEN_API_KEY);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   const loadProfile = async (userId: string) => {
       const profile = await getUserProfile(userId);
@@ -46,6 +48,22 @@ const App: React.FC = () => {
           setUserCredits(profile.credits_balance);
       }
   };
+
+  const loadProjects = useCallback(async () => {
+      setDbError(null);
+      const { projects: loaded, error } = await fetchProjects();
+      if (error) {
+          // If 42P17 (Recursion), it means the Admin policy is broken
+          if (error.code === '42P17') {
+              setDbError("Database Policy Error: Infinite Recursion Detected. Please run the 'Emergency Fix' script from SCHEMA.md in your Supabase SQL Editor.");
+          } else {
+              // Just a warning for other errors
+              console.warn("Could not fetch projects:", error);
+          }
+      } else {
+          setProjects(loaded);
+      }
+  }, []);
 
   useEffect(() => {
     getSession().then(({ data }) => {
@@ -85,9 +103,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (session) {
-      fetchProjects().then(setProjects);
+      loadProjects();
     }
-  }, [session]);
+  }, [session, loadProjects]);
 
   useEffect(() => {
     if (heyGenKey) {
@@ -140,7 +158,7 @@ const App: React.FC = () => {
   const handleSignOut = async () => {
       await signOut();
       setSession(null);
-      setUserProfile(null); // Clear profile
+      setUserProfile(null); 
       setProjects([]);
       setCurrentView(AppView.TEMPLATES);
       setAuthView(null);
@@ -175,15 +193,16 @@ const App: React.FC = () => {
         }
 
         let newProject: Project;
-        if (data.isDirectSave) {
-            let idPrefix = 'ugc_';
-            if (data.type === 'STORYBOOK') idPrefix = 'stor_';
-            else if (data.type === 'SHORTS') idPrefix = 'short_';
-            else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
-            else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
-            else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
-            else if (data.type === 'FASHION_SHOOT') idPrefix = 'fash_';
+        // Construct prefix based on type for persistence
+        let idPrefix = 'ugc_';
+        if (data.type === 'STORYBOOK') idPrefix = 'stor_';
+        else if (data.type === 'SHORTS') idPrefix = 'short_';
+        else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
+        else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
+        else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
+        else if (data.type === 'FASHION_SHOOT') idPrefix = 'fash_';
 
+        if (data.isDirectSave) {
             newProject = {
                 id: `${idPrefix}${Date.now()}`,
                 templateId: selectedTemplate.id,
@@ -266,6 +285,10 @@ const App: React.FC = () => {
       }
   };
 
+  const handleRefreshProjects = () => {
+      loadProjects();
+  };
+
   const renderContent = () => {
     if (selectedTemplate && currentView === AppView.TEMPLATES) {
         return (
@@ -290,7 +313,7 @@ const App: React.FC = () => {
             />
         );
       case AppView.PROJECTS:
-        return <ProjectList projects={projects} onPollStatus={pollStatuses} />;
+        return <ProjectList projects={projects} onPollStatus={handleRefreshProjects} />;
       case AppView.ADMIN:
         return <AdminDashboard initialTab="OVERVIEW" />;
       case AppView.ADMIN_USERS:
@@ -343,7 +366,7 @@ const App: React.FC = () => {
         onSignOut={handleSignOut}
         credits={userCredits}
         onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
-        isAdmin={userProfile?.isAdmin} // Pass admin status to sidebar
+        isAdmin={userProfile?.isAdmin} 
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative">
@@ -353,6 +376,18 @@ const App: React.FC = () => {
                 <Menu />
              </button>
         </header>
+        
+        {/* Error Banner for DB Issues */}
+        {dbError && (
+            <div className="bg-red-600 text-white p-3 text-sm font-bold flex items-center justify-between shadow-md z-50">
+                <div className="flex items-center gap-2">
+                    <AlertTriangle size={18} className="text-yellow-300" />
+                    <span>{dbError}</span>
+                </div>
+                <button onClick={() => setDbError(null)} className="bg-white/20 hover:bg-white/30 rounded px-2 py-1 text-xs">Dismiss</button>
+            </div>
+        )}
+
         <div className="flex-1 overflow-hidden p-6">
             {renderContent()}
         </div>

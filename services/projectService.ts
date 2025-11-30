@@ -1,3 +1,4 @@
+
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
 
@@ -17,6 +18,13 @@ const mapRowToProject = (row: any): Project => {
     else pType = 'AVATAR';
   }
 
+  // Robust date parsing: Supabase returns ISO strings, we need timestamp numbers
+  let createdAt = Date.now();
+  if (row.created_at) {
+      const parsed = new Date(row.created_at).getTime();
+      if (!isNaN(parsed)) createdAt = parsed;
+  }
+
   return {
     id: row.id,
     templateId: row.template_id || 'unknown',
@@ -25,10 +33,10 @@ const mapRowToProject = (row: any): Project => {
     status: row.status as ProjectStatus,
     videoUrl: row.video_url,
     error: row.error,
-    createdAt: row.created_at || Date.now(),
+    createdAt: createdAt,
     type: pType as 'AVATAR' | 'UGC_PRODUCT' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_VIDEO',
-    cost: row.cost || 1, // Add cost if available
-    user_email: row.user_email // Add email if available via join
+    cost: row.cost || 1, 
+    user_email: row.user_email
   };
 };
 
@@ -74,10 +82,11 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // --- Service Methods ---
 
-export const fetchProjects = async (): Promise<Project[]> => {
+// Changed signature to return error for UI handling
+export const fetchProjects = async (): Promise<{ projects: Project[], error?: any }> => {
   if (!isSupabaseConfigured()) {
     const localData = getLocalProjects();
-    return localData.map(mapRowToProject);
+    return { projects: localData.map(mapRowToProject) };
   }
 
   const { data, error } = await supabase
@@ -88,15 +97,18 @@ export const fetchProjects = async (): Promise<Project[]> => {
   if (error) {
     if (error.code === '42P17') {
         console.error("🔥 CRITICAL DB ERROR: Infinite Recursion in fetchProjects. Run schema fix.");
+        return { projects: [], error: { code: '42P17', message: "Database Policy Error: Infinite Recursion. Check SCHEMA.md for fix." } };
     }
     if (error.code === '42P01') {
+        // Table doesn't exist, fallback to local
         const localData = getLocalProjects();
-        return localData.map(mapRowToProject);
+        return { projects: localData.map(mapRowToProject) };
     }
     console.error('Error fetching projects:', JSON.stringify(error));
-    return [];
+    return { projects: [], error };
   }
-  return data.map(mapRowToProject);
+  
+  return { projects: data.map(mapRowToProject) };
 };
 
 // NEW: Admin function to fetch ALL projects across all users
@@ -106,19 +118,11 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
     }
 
     if (!isSupabaseConfigured()) {
-        // Return local projects + some mock ones to simulate activity
         const local = getLocalProjects().map(mapRowToProject);
-        const mocks = [
-            { id: 'mock_1', templateName: 'Viral Short #1', status: 'completed', createdAt: Date.now() - 3600000, type: 'SHORTS', cost: 3, user_email: 'sarah@creative.com' },
-            { id: 'mock_2', templateName: 'Product Ad', status: 'completed', createdAt: Date.now() - 7200000, type: 'UGC_PRODUCT', cost: 3, user_email: 'mike@business.com' },
-            { id: 'mock_3', templateName: 'Storybook', status: 'processing', createdAt: Date.now() - 100000, type: 'STORYBOOK', cost: 2, user_email: 'new@user.com' },
-        ];
-        return [...local, ...mocks] as Project[];
+        return local;
     }
 
     try {
-        // Fetch projects joined with profiles to get email
-        // Note: This assumes RLS policies allow admin to read all rows
         const { data, error } = await supabase
             .from('projects')
             .select(`
@@ -129,7 +133,7 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
 
         if (error) {
              if (error.code === '42P17') {
-                 console.error("🔥 Infinite Recursion in Admin Fetch. Please run the fix script in SCHEMA.md");
+                 console.error("🔥 Infinite Recursion in Admin Fetch.");
              }
              throw error;
         }
@@ -143,7 +147,10 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
         return mapped;
 
     } catch (e) {
-        console.warn("Fetch Admin Projects Failed:", e);
+        console.warn("Fetch Admin Projects Failed (Returning Fallback):", e);
+        // Fallback to basic fetch if join fails
+        const { data } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
+        if (data) return data.map(mapRowToProject);
         return [];
     }
 };
@@ -232,6 +239,7 @@ export const saveProject = async (project: Project) => {
 
   const templateIdSafe = project.templateId || 'unknown_template';
 
+  // Sanitize payload to remove undefined values which Supabase might reject
   const payload = {
       id: project.id,
       user_id: user.data.user.id,
@@ -241,9 +249,9 @@ export const saveProject = async (project: Project) => {
       status: project.status,
       video_url: project.videoUrl,
       error: project.error,
-      created_at: project.createdAt,
+      created_at: new Date(project.createdAt).toISOString(), // Convert to ISO for DB
       project_type: project.type || 'AVATAR',
-      cost: project.cost // Ensure cost is saved
+      cost: project.cost ?? 1
   };
 
   const { error } = await supabase
@@ -300,18 +308,6 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
     .eq('id', id);
 
   if (error) {
-      if (error.code === '42P01') {
-          const projects = getLocalProjects();
-          const index = projects.findIndex((p: any) => p.id === id);
-          if (index >= 0) {
-              if (updates.status) projects[index].status = updates.status;
-              if (updates.videoUrl) projects[index].video_url = updates.videoUrl;
-              if (updates.thumbnailUrl) projects[index].thumbnail_url = updates.thumbnailUrl;
-              if (updates.error) projects[index].error = updates.error;
-              saveLocalProjects(projects);
-          }
-          return;
-      }
       console.error('Error updating project:', JSON.stringify(error));
   }
 };
