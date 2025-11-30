@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
@@ -58,42 +59,73 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
-    const runProduction = async () => {
+    const runProduction = async (resume: boolean = false) => {
         if (!idea.trim()) return;
         
         setIsProcessing(true);
-        setStep('SCRIPT');
-        setLogs([]);
-        setCompletedImages(0);
-        setManifest(null);
-        setVideoUrl(null);
         setErrorMsg('');
         setIsSaved(false);
 
+        // RESET LOGIC (Only if not resuming)
+        if (!resume) {
+            setStep('SCRIPT');
+            setLogs([]);
+            setCompletedImages(0);
+            setManifest(null);
+            setVideoUrl(null);
+        } else {
+            addLog("🔄 Resuming production from last successful step...");
+        }
+
         try {
+            // INITIALIZE MANIFEST
+            // If resuming, use the existing state. If starting new, it's null.
+            let currentManifest: ShortMakerManifest | null = resume ? manifest : null;
+
             // STEP 1: SCRIPT / MANIFEST
-            addLog(`🧠 Generating ${duration} story concept and script...`);
-            const storyManifest = await generateStory({
-                idea,
-                seed: seed || undefined,
-                style_tone: style,
-                mode: template.mode,
-                durationTier: duration,
-                aspectRatio: aspectRatio
-            });
-            setManifest(storyManifest);
-            addLog(`✅ Script generated successfully (${storyManifest.scenes.length} scenes).`);
-            
-            await new Promise(r => setTimeout(r, 1000));
+            if (!currentManifest) {
+                setStep('SCRIPT');
+                addLog(`🧠 Generating ${duration} story concept and script...`);
+                currentManifest = await generateStory({
+                    idea,
+                    seed: seed || undefined,
+                    style_tone: style,
+                    mode: template.mode,
+                    durationTier: duration,
+                    aspectRatio: aspectRatio
+                });
+                setManifest(currentManifest);
+                addLog(`✅ Script generated successfully (${currentManifest.scenes.length} scenes).`);
+                await new Promise(r => setTimeout(r, 1000));
+            } else if (resume) {
+                addLog("⏩ Script already exists, skipping generation.");
+            }
+
+            if (!currentManifest) throw new Error("Failed to initialize story manifest.");
 
             // STEP 2: VISUALS
             setStep('VISUALS');
-            addLog(`🎨 Starting image generation (${aspectRatio}) using ${visualModel}...`);
             
-            const workingScenes = [...storyManifest.scenes];
-            const generationSeed = storyManifest.seed || Math.random().toString();
+            // Setup working scenes
+            const workingScenes = [...currentManifest.scenes];
+            const generationSeed = currentManifest.seed || Math.random().toString();
+
+            // If resuming, check how many are already done
+            const alreadyDoneCount = workingScenes.filter(s => !!s.generated_image_url).length;
+            setCompletedImages(alreadyDoneCount);
+            
+            if (alreadyDoneCount < workingScenes.length) {
+                addLog(`🎨 Generating visuals (${alreadyDoneCount}/${workingScenes.length} ready)...`);
+            } else if (resume) {
+                addLog("⏩ Visuals already complete, skipping.");
+            }
 
             for (let i = 0; i < workingScenes.length; i++) {
+                // SKIP IF ALREADY GENERATED
+                if (workingScenes[i].generated_image_url) {
+                    continue;
+                }
+
                 addLog(`Painting Scene ${i + 1}: "${workingScenes[i].visual_description.substring(0, 30)}..."`);
                 
                 let url = '';
@@ -110,7 +142,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             visualModel 
                         );
                         workingScenes[i].generated_image_url = url;
-                        setManifest({ ...storyManifest, scenes: [...workingScenes] });
+                        // Update state incrementally so user sees progress
+                        setManifest({ ...currentManifest, scenes: [...workingScenes] });
                         setCompletedImages(prev => prev + 1);
                     } catch (err) {
                         attempts++;
@@ -122,76 +155,91 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             await new Promise(r => setTimeout(r, delay)); 
                         } else {
                             addLog(`❌ Failed to generate image for Scene ${i+1} after ${maxAttempts} attempts.`);
+                            throw new Error(`Failed to generate image for Scene ${i+1}`);
                         }
                     }
                 }
             }
-            addLog("✅ Visuals generated.");
+            
+            // Ensure manifest state is fully updated with all images
+            currentManifest = { ...currentManifest, scenes: workingScenes };
+            setManifest(currentManifest);
+            if (completedImages === workingScenes.length || resume) {
+                 // only log if we actually did something or finished
+                 addLog("✅ Visuals generated.");
+            }
 
             // STEP 3: AUDIO
             setStep('AUDIO');
-            addLog("🎙️ Synthesizing voiceover narration...");
-            
-            const elevenKey = localStorage.getItem('genavatar_eleven_key');
-            let generatedAudioUrl = '';
-            
-            try {
-                const audioRes = await synthesizeAudio(storyManifest, elevenKey || undefined);
-                generatedAudioUrl = audioRes.audioUrl;
-                addLog(`✅ Audio created (${Math.round(audioRes.duration)}s).`);
-            } catch (err) {
-                console.warn("Audio failed", err);
-                addLog("⚠️ Audio generation had issues, proceeding with silent/fallback.");
-            }
+            let generatedAudioUrl = currentManifest.generated_audio_url || '';
 
-            const manifestWithAudio = {
-                ...storyManifest,
-                scenes: workingScenes,
-                generated_audio_url: generatedAudioUrl
-            };
-            setManifest(manifestWithAudio);
+            if (!generatedAudioUrl) {
+                addLog("🎙️ Synthesizing voiceover narration...");
+                const elevenKey = localStorage.getItem('genavatar_eleven_key');
+                
+                try {
+                    const audioRes = await synthesizeAudio(currentManifest, elevenKey || undefined);
+                    generatedAudioUrl = audioRes.audioUrl;
+                    addLog(`✅ Audio created (${Math.round(audioRes.duration)}s).`);
+                } catch (err) {
+                    console.warn("Audio failed", err);
+                    addLog("⚠️ Audio generation had issues, proceeding with silent/fallback.");
+                }
+                
+                currentManifest = { ...currentManifest, generated_audio_url: generatedAudioUrl };
+                setManifest(currentManifest);
+            } else if (resume) {
+                addLog("⏩ Audio already ready, skipping.");
+            }
 
             // STEP 4: ASSEMBLY
             setStep('ASSEMBLY');
-            addLog("🎬 Stitching video frames and syncing audio...");
             
-            const finalVideoUrl = await assembleVideo(manifestWithAudio);
-            setVideoUrl(finalVideoUrl);
-            addLog("✅ Video assembly complete!");
-
-            // FINISH & AUTO SAVE
-            setStep('COMPLETE');
-            addLog("☁️ Uploading to cloud storage...");
-            
-            try {
-                const permanentVideoUrl = await uploadToStorage(
-                    finalVideoUrl, 
-                    `${isStorybook ? 'story' : 'short'}.webm`, 
-                    'stories'
-                );
-
-                const thumbUrl = manifestWithAudio.scenes[0].generated_image_url;
-                let permanentThumbUrl = thumbUrl;
-                if (thumbUrl) {
-                    permanentThumbUrl = await uploadToStorage(thumbUrl, 'thumbnail.png', 'thumbnails');
-                }
-
-                addLog("💾 Saving project to library...");
+            // Check if we already have a video url from a previous run that succeeded but maybe upload failed
+            if (resume && videoUrl) {
+                 addLog("⏩ Video already assembled.");
+            } else {
+                addLog("🎬 Stitching video frames and syncing audio...");
+                const finalVideoUrl = await assembleVideo(currentManifest);
+                setVideoUrl(finalVideoUrl);
+                addLog("✅ Video assembly complete!");
                 
-                await onGenerate({
-                    isDirectSave: true,
-                    videoUrl: permanentVideoUrl, 
-                    thumbnailUrl: permanentThumbUrl,
-                    cost: COST,
-                    templateName: (isStorybook ? "Story: " : "Short: ") + manifestWithAudio.title,
-                    type: isStorybook ? 'STORYBOOK' : 'SHORTS',
-                    shouldRedirect: false
-                });
-                setIsSaved(true);
-                addLog("✅ Project saved successfully.");
-            } catch (saveError) {
-                console.error("Save error:", saveError);
-                addLog("❌ Error saving project. Please check your credits.");
+                // STEP 5: FINISH & AUTO SAVE
+                setStep('COMPLETE');
+                addLog("☁️ Uploading to cloud storage...");
+                
+                try {
+                    const permanentVideoUrl = await uploadToStorage(
+                        finalVideoUrl, 
+                        `${isStorybook ? 'story' : 'short'}.webm`, 
+                        'stories'
+                    );
+
+                    const thumbUrl = currentManifest.scenes[0].generated_image_url;
+                    let permanentThumbUrl = thumbUrl;
+                    if (thumbUrl) {
+                        try {
+                            permanentThumbUrl = await uploadToStorage(thumbUrl, 'thumbnail.png', 'thumbnails');
+                        } catch (e) { console.warn("Thumb upload fail", e); }
+                    }
+
+                    addLog("💾 Saving project to library...");
+                    
+                    await onGenerate({
+                        isDirectSave: true,
+                        videoUrl: permanentVideoUrl, 
+                        thumbnailUrl: permanentThumbUrl,
+                        cost: COST,
+                        templateName: (isStorybook ? "Story: " : "Short: ") + currentManifest.title,
+                        type: isStorybook ? 'STORYBOOK' : 'SHORTS',
+                        shouldRedirect: false
+                    });
+                    setIsSaved(true);
+                    addLog("✅ Project saved successfully.");
+                } catch (saveError) {
+                    console.error("Save error:", saveError);
+                    addLog("❌ Error saving project. You can download the video manually below.");
+                }
             }
 
         } catch (e: any) {
@@ -343,7 +391,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </span>
                             </div>
                             <button
-                                onClick={runProduction}
+                                onClick={() => runProduction(false)}
                                 disabled={!idea.trim()}
                                 className={`w-full ${isStorybook ? 'bg-gradient-to-r from-amber-600 to-orange-600' : 'bg-gradient-to-r from-pink-600 to-purple-600'} hover:opacity-90 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-3 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:transform-none`}
                             >
@@ -357,7 +405,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
-    // PRODUCTION VIEW (unchanged)
+    // PRODUCTION VIEW
     return (
         <div className="h-full bg-black text-white flex flex-col overflow-hidden">
             <div className="h-16 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between px-6 flex-shrink-0 backdrop-blur-md">
@@ -404,7 +452,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             </div>
                             <div className="flex gap-2 mt-2 sm:mt-0">
                                 <button onClick={() => setStep('INPUT')} className="bg-gray-800 border border-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-700 flex items-center gap-1"><Edit2 size={12} /> Edit</button>
-                                <button onClick={runProduction} className="bg-red-800 px-3 py-1 rounded text-xs hover:bg-red-700 flex items-center gap-1"><RefreshCw size={12} /> Retry</button>
+                                <button onClick={() => runProduction(true)} className="bg-red-800 px-3 py-1 rounded text-xs hover:bg-red-700 flex items-center gap-1"><RefreshCw size={12} /> Retry</button>
                             </div>
                         </div>
                     )}
