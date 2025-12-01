@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2 } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
-import { getApiKey } from '../services/geminiService';
+import { getApiKey, generateSpeech } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
 
 interface ShortMakerEditorProps {
@@ -17,6 +17,15 @@ type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'C
 type DurationTier = '15s' | '30s' | '60s';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
+
+// Voice Configuration Data
+const GEMINI_VOICES = [
+    { id: 'Fenrir', label: 'Fenrir', gender: 'Male', tone: 'Deep, Authoritative', desc: 'Ideal for epic narrations.' },
+    { id: 'Kore', label: 'Kore', gender: 'Female', tone: 'Calm, Soothing', desc: 'Perfect for storybooks & relaxation.' },
+    { id: 'Puck', label: 'Puck', gender: 'Male', tone: 'Energetic, Youthful', desc: 'Great for high-energy shorts.' },
+    { id: 'Charon', label: 'Charon', gender: 'Male', tone: 'Low, Steady', desc: 'Good for news or documentary.' },
+    { id: 'Zephyr', label: 'Zephyr', gender: 'Female', tone: 'Gentle, Friendly', desc: 'Suitable for educational content.' },
+];
 
 export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
     const isStorybook = template.mode === 'STORYBOOK';
@@ -32,6 +41,13 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [duration, setDuration] = useState<DurationTier>('30s');
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
     const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
+    
+    // Audio Settings
+    const [selectedVoice, setSelectedVoice] = useState('Fenrir');
+    const [bgMusic, setBgMusic] = useState<string | null>(null); // Data URI of uploaded music
+    const [bgMusicName, setBgMusicName] = useState<string>('');
+    const [playingVoicePreview, setPlayingVoicePreview] = useState<string | null>(null);
+    const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
     // Progress Tracking
     const [logs, setLogs] = useState<string[]>([]);
@@ -52,10 +68,57 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const COST = getCost(duration);
 
+    useEffect(() => {
+        return () => {
+            if (previewAudioRef.current) {
+                previewAudioRef.current.pause();
+            }
+        };
+    }, []);
+
     const addLog = (msg: string) => {
         setLogs(prev => [...prev, msg]);
         if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+    };
+
+    const handleMusicUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setBgMusic(reader.result as string);
+                setBgMusicName(file.name);
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const playVoicePreview = async (e: React.MouseEvent, voiceId: string) => {
+        e.stopPropagation();
+        
+        if (playingVoicePreview === voiceId) {
+            previewAudioRef.current?.pause();
+            setPlayingVoicePreview(null);
+            return;
+        }
+
+        if (previewAudioRef.current) previewAudioRef.current.pause();
+        setPlayingVoicePreview(voiceId);
+
+        try {
+            const previewText = "Hello, this is a preview of my voice.";
+            const url = await generateSpeech(previewText, voiceId);
+            
+            const audio = new Audio(url);
+            previewAudioRef.current = audio;
+            audio.onended = () => setPlayingVoicePreview(null);
+            audio.onerror = () => setPlayingVoicePreview(null);
+            audio.play();
+        } catch (e) {
+            console.error("Preview failed", e);
+            setPlayingVoicePreview(null);
         }
     };
 
@@ -79,7 +142,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
         try {
             // INITIALIZE MANIFEST
-            // If resuming, use the existing state. If starting new, it's null.
             let currentManifest: ShortMakerManifest | null = resume ? manifest : null;
 
             // STEP 1: SCRIPT / MANIFEST
@@ -92,7 +154,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     style_tone: style,
                     mode: template.mode,
                     durationTier: duration,
-                    aspectRatio: aspectRatio
+                    aspectRatio: aspectRatio,
+                    voice_preference: { voice: selectedVoice } // Pass pref to prompt context (optional)
                 });
                 setManifest(currentManifest);
                 addLog(`✅ Script generated successfully (${currentManifest.scenes.length} scenes).`);
@@ -165,7 +228,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
             if (completedImages === workingScenes.length || resume) {
-                 // only log if we actually did something or finished
                  addLog("✅ Visuals generated.");
             }
 
@@ -174,11 +236,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             let generatedAudioUrl = currentManifest.generated_audio_url || '';
 
             if (!generatedAudioUrl) {
-                addLog("🎙️ Synthesizing voiceover narration...");
+                addLog(`🎙️ Synthesizing voiceover with ${selectedVoice}...`);
                 const elevenKey = localStorage.getItem('genavatar_eleven_key');
                 
                 try {
-                    const audioRes = await synthesizeAudio(currentManifest, elevenKey || undefined);
+                    const audioRes = await synthesizeAudio(
+                        currentManifest, 
+                        elevenKey || undefined, 
+                        selectedVoice // Pass user selection
+                    );
                     generatedAudioUrl = audioRes.audioUrl;
                     addLog(`✅ Audio created (${Math.round(audioRes.duration)}s).`);
                 } catch (err) {
@@ -195,12 +261,17 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             // STEP 4: ASSEMBLY
             setStep('ASSEMBLY');
             
-            // Check if we already have a video url from a previous run that succeeded but maybe upload failed
+            // Check if we already have a video url from a previous run that succeeded
             if (resume && videoUrl) {
                  addLog("⏩ Video already assembled.");
             } else {
-                addLog("🎬 Stitching video frames and syncing audio...");
-                const finalVideoUrl = await assembleVideo(currentManifest);
+                addLog("🎬 Stitching video frames, mixing audio...");
+                
+                if (bgMusic) {
+                    addLog(`🎵 Adding background music: ${bgMusicName}`);
+                }
+
+                const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
                 addLog("✅ Video assembly complete!");
                 
@@ -238,7 +309,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     addLog("✅ Project saved successfully.");
                 } catch (saveError) {
                     console.error("Save error:", saveError);
-                    addLog("❌ Error saving project. You can download the video manually below.");
+                    addLog("❌ Error saving project to cloud. Please download manually.");
                 }
             }
 
@@ -272,7 +343,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     if (step === 'INPUT') {
         return (
             <div className="h-full bg-black text-white p-6 overflow-y-auto flex items-center justify-center">
-                <div className="max-w-2xl w-full bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+                <div className="max-w-4xl w-full bg-gray-900 border border-gray-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
                     <div className={`absolute top-0 right-0 w-64 h-64 ${isStorybook ? 'bg-amber-600' : 'bg-pink-600'} opacity-10 blur-[80px] rounded-full pointer-events-none`} />
 
                     <div className="text-center mb-8 relative z-10">
@@ -287,25 +358,26 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         </p>
                     </div>
 
-                    <div className="space-y-6 relative z-10">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-300 mb-2">Video Idea</label>
-                            <textarea
-                                value={idea}
-                                onChange={(e) => setIdea(e.target.value)}
-                                placeholder={isStorybook ? "A brave toaster goes on an adventure..." : "Top 5 facts about Mars..."}
-                                className={`w-full bg-black/50 border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 focus:ring-2 ${isStorybook ? 'focus:ring-amber-500' : 'focus:ring-pink-500'} outline-none resize-none h-28 text-lg`}
-                            />
-                        </div>
+                    <div className="flex flex-col lg:flex-row gap-8 relative z-10">
+                        {/* LEFT COLUMN: VISUALS & PROMPT */}
+                        <div className="flex-1 space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-300 mb-2">Video Idea</label>
+                                <textarea
+                                    value={idea}
+                                    onChange={(e) => setIdea(e.target.value)}
+                                    placeholder={isStorybook ? "A brave toaster goes on an adventure..." : "Top 5 facts about Mars..."}
+                                    className={`w-full bg-black/50 border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 focus:ring-2 ${isStorybook ? 'focus:ring-amber-500' : 'focus:ring-pink-500'} outline-none resize-none h-28 text-lg`}
+                                />
+                            </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2">Art Style</label>
                                     <select 
                                         value={style}
                                         onChange={(e) => setStyle(e.target.value)}
-                                        className="w-full bg-black/50 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-white transition-colors"
+                                        className="w-full bg-black/50 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-white transition-colors text-sm"
                                     >
                                         <option>Cinematic</option>
                                         <option>Photorealistic</option>
@@ -320,36 +392,35 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
-                                        <Aperture size={16} /> Visual Model
+                                        <Aperture size={14} /> Visual Model
                                     </label>
                                     <select 
                                         value={visualModel}
                                         onChange={(e) => setVisualModel(e.target.value as VisualModel)}
-                                        className="w-full bg-black/50 border border-gray-700 rounded-lg p-3 text-white outline-none focus:border-white transition-colors"
+                                        className="w-full bg-black/50 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-white transition-colors text-sm"
                                     >
-                                        <option value="nano_banana">Nano Banana (Default, Fast)</option>
+                                        <option value="nano_banana">Nano Banana (Fast)</option>
                                         <option value="flux">Flux (Artistic)</option>
-                                        <option value="gemini_pro">Gemini 3 Pro (High Fidelity)</option>
+                                        <option value="gemini_pro">Gemini 3 Pro (HQ)</option>
                                     </select>
                                 </div>
                             </div>
 
-                            <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-300 mb-2">Duration (Approx)</label>
-                                    <div className="grid grid-cols-3 gap-2">
+                                    <label className="block text-sm font-medium text-gray-300 mb-2">Duration</label>
+                                    <div className="flex gap-2">
                                         {(['15s', '30s', '60s'] as DurationTier[]).map(t => (
                                             <button
                                                 key={t}
                                                 onClick={() => setDuration(t)}
-                                                className={`py-2 rounded-lg text-sm font-bold border transition-all flex flex-col items-center justify-center ${
+                                                className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-all ${
                                                     duration === t 
                                                     ? (isStorybook ? 'bg-amber-600 border-amber-500 text-white' : 'bg-pink-600 border-pink-500 text-white')
                                                     : 'bg-black/30 border-gray-700 text-gray-400 hover:bg-white/10'
                                                 }`}
                                             >
-                                                <span>{t}</span>
-                                                <span className="text-[10px] opacity-70 font-normal">{getCost(t)} Cr</span>
+                                                {t} <span className="opacity-70 font-normal ml-1">{getCost(t)}Cr</span>
                                             </button>
                                         ))}
                                     </div>
@@ -357,25 +428,22 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                                 <div>
                                     <label className="block text-sm font-medium text-gray-300 mb-2">Aspect Ratio</label>
-                                    <div className="grid grid-cols-4 gap-2">
+                                    <div className="flex gap-2">
                                         {[
-                                            { id: '9:16', icon: RectangleVertical, label: '9:16' },
-                                            { id: '16:9', icon: RectangleHorizontal, label: '16:9' },
-                                            { id: '1:1', icon: Square, label: '1:1' },
-                                            { id: '4:3', icon: Layout, label: '4:3' }
+                                            { id: '9:16', icon: RectangleVertical },
+                                            { id: '16:9', icon: RectangleHorizontal },
+                                            { id: '1:1', icon: Square }
                                         ].map((item) => (
                                             <button
                                                 key={item.id}
                                                 onClick={() => setAspectRatio(item.id as AspectRatio)}
-                                                className={`flex flex-col items-center justify-center p-2 rounded-lg border transition-all ${
+                                                className={`flex-1 py-2 rounded-lg border transition-all flex items-center justify-center ${
                                                     aspectRatio === item.id
                                                     ? (isStorybook ? 'bg-amber-600/20 border-amber-500 text-amber-200' : 'bg-pink-600/20 border-pink-500 text-pink-200')
                                                     : 'bg-black/30 border-gray-700 text-gray-500 hover:bg-white/10'
                                                 }`}
-                                                title={item.label}
                                             >
-                                                <item.icon size={18} />
-                                                <span className="text-[10px] mt-1 font-medium">{item.label}</span>
+                                                <item.icon size={16} />
                                             </button>
                                         ))}
                                     </div>
@@ -383,21 +451,88 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             </div>
                         </div>
 
-                        <div className="mt-4 flex flex-col gap-2">
-                            <div className="flex justify-between text-xs text-gray-400 px-1 font-medium">
-                                <span>Estimated Cost</span>
-                                <span className={userCredits < COST ? "text-red-400 font-bold" : "text-green-400 font-bold"}>
-                                    {COST} Credits
-                                </span>
+                        {/* RIGHT COLUMN: AUDIO SETTINGS */}
+                        <div className="flex-1 space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-300 mb-2">Voice Actor</label>
+                                <div className="grid grid-cols-2 gap-2 h-40 overflow-y-auto pr-1 custom-scrollbar">
+                                    {GEMINI_VOICES.map(voice => (
+                                        <div 
+                                            key={voice.id}
+                                            onClick={() => setSelectedVoice(voice.id)}
+                                            className={`p-3 rounded-lg border cursor-pointer transition-all relative group ${
+                                                selectedVoice === voice.id 
+                                                ? 'bg-indigo-900/40 border-indigo-500' 
+                                                : 'bg-black/30 border-gray-700 hover:bg-gray-800'
+                                            }`}
+                                        >
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <div className={`text-sm font-bold ${selectedVoice === voice.id ? 'text-indigo-300' : 'text-gray-200'}`}>{voice.label}</div>
+                                                    <div className="text-[10px] text-gray-500 uppercase font-semibold tracking-wide">{voice.gender} • {voice.tone}</div>
+                                                </div>
+                                                <button
+                                                    onClick={(e) => playVoicePreview(e, voice.id)}
+                                                    className={`p-1.5 rounded-full transition-all ${
+                                                        playingVoicePreview === voice.id 
+                                                        ? 'bg-indigo-500 text-white animate-pulse' 
+                                                        : 'bg-gray-700 text-gray-400 hover:bg-indigo-500 hover:text-white'
+                                                    }`}
+                                                >
+                                                    {playingVoicePreview === voice.id ? <Pause size={12} /> : <Play size={12} />}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
-                            <button
-                                onClick={() => runProduction(false)}
-                                disabled={!idea.trim()}
-                                className={`w-full ${isStorybook ? 'bg-gradient-to-r from-amber-600 to-orange-600' : 'bg-gradient-to-r from-pink-600 to-purple-600'} hover:opacity-90 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-3 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:transform-none`}
-                            >
-                                <Wand2 size={20} />
-                                <span>Generate Video ({COST} Credits)</span>
-                            </button>
+
+                            <div>
+                                <label className="block text-sm font-medium text-gray-300 mb-2">Background Music (Optional)</label>
+                                <div className={`relative p-4 rounded-xl border border-dashed transition-all ${
+                                    bgMusic ? 'border-green-500/50 bg-green-900/10' : 'border-gray-700 bg-black/30 hover:bg-black/50'
+                                }`}>
+                                    {bgMusic ? (
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-3 overflow-hidden">
+                                                <div className="w-8 h-8 bg-green-900 rounded-full flex items-center justify-center text-green-400 flex-shrink-0">
+                                                    <Music size={16} />
+                                                </div>
+                                                <span className="text-xs font-medium text-green-200 truncate max-w-[150px]">{bgMusicName}</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => { setBgMusic(null); setBgMusicName(''); }}
+                                                className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-full transition-colors"
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <label className="flex flex-col items-center justify-center cursor-pointer py-2">
+                                            <Upload size={20} className="text-gray-500 mb-2" />
+                                            <span className="text-xs text-gray-400 font-medium">Click to upload MP3 / WAV</span>
+                                            <input type="file" accept="audio/*" onChange={handleMusicUpload} className="hidden" />
+                                        </label>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="pt-2">
+                                <div className="flex justify-between text-xs text-gray-400 px-1 font-medium mb-2">
+                                    <span>Estimated Cost</span>
+                                    <span className={userCredits < COST ? "text-red-400 font-bold" : "text-green-400 font-bold"}>
+                                        {COST} Credits
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={() => runProduction(false)}
+                                    disabled={!idea.trim()}
+                                    className={`w-full ${isStorybook ? 'bg-gradient-to-r from-amber-600 to-orange-600' : 'bg-gradient-to-r from-pink-600 to-purple-600'} hover:opacity-90 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-3 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:transform-none`}
+                                >
+                                    <Wand2 size={20} />
+                                    <span>Generate Video ({COST} Credits)</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -437,8 +572,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             <span className="text-indigo-200 font-mono text-sm">
                                 {step === 'SCRIPT' && "AI is dreaming up the story..."}
                                 {step === 'VISUALS' && `Painting scenes... (${completedImages}/${manifest?.scenes?.length || '?'})`}
-                                {step === 'AUDIO' && "Recording voiceover..."}
-                                {step === 'ASSEMBLY' && "Stitching final video..."}
+                                {step === 'AUDIO' && `Recording voiceover with ${selectedVoice}...`}
+                                {step === 'ASSEMBLY' && "Stitching final video & mixing audio..."}
                                 {step === 'COMPLETE' && "Saving to Cloud..."}
                             </span>
                          </div>

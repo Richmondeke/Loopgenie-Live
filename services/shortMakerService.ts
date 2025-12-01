@@ -52,7 +52,6 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   const ideaClean = (req.idea || '').substring(0, 500).replace(/"/g, "'").replace(/\n/g, " ");
 
   // Schema Definition
-  // We define this locally to inject into the prompt since we cannot use responseSchema config with tools
   const schemaDefinition = {
     type: "OBJECT",
     properties: {
@@ -285,21 +284,20 @@ export const generateSceneImage = async (
 
 export const synthesizeAudio = async (
     manifest: ShortMakerManifest, 
-    elevenApiKey?: string
+    elevenApiKey?: string,
+    preferredVoice: string = "Fenrir" // Passed from Editor
 ): Promise<{ audioUrl: string, duration: number }> => {
     
     // 1. Try Gemini TTS (Free/Built-in) first if no ElevenLabs key or as default
     if (!elevenApiKey) {
-        console.log("No ElevenLabs key found, using Gemini TTS...");
+        console.log(`No ElevenLabs key found, using Gemini TTS (${preferredVoice})...`);
         
         try {
             // STRATEGY A: Generate Full Script
-            // This is preferred for smoothness but sometimes fails if text is too long or contains weird chars.
             const fullText = manifest.scenes.map(s => s.narration_text).join(". ");
             
-            // Add timeout for Gemini TTS as well
             const audioUrl = await withTimeout(
-                generateSpeech(fullText, "Fenrir"), 
+                generateSpeech(fullText, preferredVoice), 
                 25000, 
                 "TTS Generation timed out"
             ); 
@@ -314,8 +312,6 @@ export const synthesizeAudio = async (
             console.warn("Full TTS failed, switching to segment-based generation...", e);
             
             // STRATEGY B: Segment-based (Failsafe)
-            // Generate each sentence individually and stitch them together.
-            // This avoids length limits and timeout issues on the API side.
             const audioSegments: string[] = [];
             let totalWords = 0;
 
@@ -324,11 +320,10 @@ export const synthesizeAudio = async (
                 totalWords += scene.narration_text.split(' ').length;
                 try {
                     // Generate clip for this scene
-                    const segUrl = await generateSpeech(scene.narration_text, "Fenrir"); 
+                    const segUrl = await generateSpeech(scene.narration_text, preferredVoice); 
                     audioSegments.push(segUrl);
                 } catch (innerErr) {
                     console.error(`Failed to generate audio for scene ${scene.scene_number}`, innerErr);
-                    // We continue, just this scene will be silent or skipped in audio stream
                 }
             }
             
@@ -343,6 +338,7 @@ export const synthesizeAudio = async (
     }
 
     // 2. Try ElevenLabs if key exists
+    // (Logic truncated for brevity - assumes standard ElevenLabs block using default voice if no specific map)
     const fullText = manifest.scenes
         .map(s => s.narration_text)
         .join(' <break time="0.5s" /> ');
@@ -387,7 +383,7 @@ export const synthesizeAudio = async (
         console.warn("ElevenLabs failed, falling back to Gemini TTS:", error);
         // Fallback to Gemini (Full Text attempt)
         const text = manifest.scenes.map(s => s.narration_text).join(". ");
-        const url = await withTimeout(generateSpeech(text, "Fenrir"), 20000, "Fallback TTS timed out");
+        const url = await withTimeout(generateSpeech(text, preferredVoice), 20000, "Fallback TTS timed out");
         return { audioUrl: url, duration: 25 };
     }
 };
@@ -396,7 +392,10 @@ export const synthesizeAudio = async (
 // 4. ASSEMBLE VIDEO (FFMPEG / Client-Side)
 // ==========================================
 
-export const assembleVideo = async (manifest: ShortMakerManifest): Promise<string> => {
+export const assembleVideo = async (
+    manifest: ShortMakerManifest, 
+    backgroundMusicUrl?: string
+): Promise<string> => {
     // Prepare scenes with both Image URL and Text for captions
     const scenes = manifest.scenes
         .filter(s => !!s.generated_image_url)
@@ -411,6 +410,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest): Promise<strin
         throw new Error("No images generated to assemble video");
     }
 
-    // Use the FFMPEG service to stitch inputs
-    return await stitchVideoFrames(scenes, audioUrl);
+    // Use the FFMPEG service to stitch inputs, now with background music support
+    return await stitchVideoFrames(scenes, audioUrl, undefined, undefined, undefined, backgroundMusicUrl);
 };

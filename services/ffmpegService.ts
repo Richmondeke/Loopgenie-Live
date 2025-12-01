@@ -130,22 +130,23 @@ const drawCaptions = (
  * Features:
  * - Ken Burns Effect (Slow Zoom)
  * - Professional Captioning
- * - Audio Mixing
+ * - Audio Mixing (Narration + Background Music)
  */
 export const stitchVideoFrames = async (
   scenes: VideoScene[], 
   audioUrl: string | undefined, 
   durationPerImageMs: number = 5000,
   targetWidth?: number,
-  targetHeight?: number
+  targetHeight?: number,
+  backgroundAudioUrl?: string // New Parameter
 ): Promise<string> => {
-  console.log("Starting client-side video stitching with Ken Burns & Captions...");
+  console.log("Starting client-side video stitching with Ken Burns, Captions & BG Music...");
 
   return new Promise(async (resolve, reject) => {
     // Safety timeout
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
-    }, 120000); // 2 mins
+    }, 180000); // 3 mins
 
     try {
         // 1. Prepare Canvas
@@ -175,33 +176,59 @@ export const stitchVideoFrames = async (
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, width, height);
 
-        // 2. Prepare Audio & Duration
+        // 2. Prepare Audio (Mixing Narration + BG Music)
         let audioContext: AudioContext | null = null;
-        let audioBuffer: AudioBuffer | null = null;
         let dest: MediaStreamAudioDestinationNode | null = null;
-        let sourceNode: AudioBufferSourceNode | null = null;
+        let narrationSource: AudioBufferSourceNode | null = null;
+        let bgMusicSource: AudioBufferSourceNode | null = null;
 
-        if (audioUrl) {
+        // Initialize AudioContext if we have any audio
+        if (audioUrl || backgroundAudioUrl) {
             try {
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
                 audioContext = new AudioContextClass();
-                const response = await fetch(audioUrl);
-                const arrayBuffer = await response.arrayBuffer();
-                audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                
-                // Recalculate duration based on audio length
-                if (audioBuffer.duration && audioBuffer.duration > 1) {
-                    durationPerImageMs = (audioBuffer.duration * 1000) / scenes.length;
-                    console.log(`Adjusted duration per scene to ${Math.round(durationPerImageMs)}ms based on audio.`);
-                }
-                
                 dest = audioContext.createMediaStreamDestination();
-                sourceNode = audioContext.createBufferSource();
-                sourceNode.buffer = audioBuffer;
-                sourceNode.connect(dest);
+
+                // A. Load Narration (Voiceover)
+                if (audioUrl) {
+                    const res = await fetch(audioUrl);
+                    const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
+                    
+                    // Recalculate duration based on narration length
+                    if (buf.duration && buf.duration > 1) {
+                        durationPerImageMs = (buf.duration * 1000) / scenes.length;
+                        console.log(`Adjusted duration per scene to ${Math.round(durationPerImageMs)}ms based on narration.`);
+                    }
+
+                    narrationSource = audioContext.createBufferSource();
+                    narrationSource.buffer = buf;
+                    narrationSource.connect(dest);
+                }
+
+                // B. Load Background Music
+                if (backgroundAudioUrl) {
+                    try {
+                        const res = await fetch(backgroundAudioUrl);
+                        const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
+                        
+                        bgMusicSource = audioContext.createBufferSource();
+                        bgMusicSource.buffer = buf;
+                        bgMusicSource.loop = true; // Loop music if short
+
+                        // Create Gain Node for Volume Ducking (12% volume)
+                        const bgGain = audioContext.createGain();
+                        bgGain.gain.value = 0.12; 
+
+                        bgMusicSource.connect(bgGain);
+                        bgGain.connect(dest);
+                    } catch (bgError) {
+                        console.warn("Failed to load background music:", bgError);
+                    }
+                }
+
             } catch (e) {
-                console.error("Error preparing audio:", e);
-                // Continue without audio if failed
+                console.error("Error preparing audio context:", e);
+                // Continue without audio if critical failure
             }
         }
 
@@ -221,13 +248,13 @@ export const stitchVideoFrames = async (
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
             'video/webm',
-            'video/mp4' // Some browsers support this now
+            'video/mp4' 
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
 
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 5000000 // 5 Mbps
+            videoBitsPerSecond: 3500000 // 3.5 Mbps (Optimized for upload size)
         });
 
         const chunks: Blob[] = [];
@@ -239,13 +266,17 @@ export const stitchVideoFrames = async (
             clearTimeout(timeoutId);
             const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
             const url = URL.createObjectURL(blob);
+            
+            // Cleanup Audio Context
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
+            
             resolve(url);
         };
 
-        // 4. Start Recording & Animation Loop
+        // 4. Start Recording & Audio
         recorder.start();
-        if (sourceNode) sourceNode.start(0);
+        if (narrationSource) narrationSource.start(0);
+        if (bgMusicSource) bgMusicSource.start(0);
 
         // Preload all images to avoid stutter
         const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
@@ -459,10 +490,7 @@ export const concatenateVideos = async (
                         // Draw fit cover
                         const imgRatio = vid.videoWidth / vid.videoHeight;
                         const canvasRatio = width / height;
-                        let renderW, renderH, offsetX, offsetY;
                         
-                        // Simple center fit (contain) or cover logic. Using contain for safety on varying inputs, 
-                        // or cover if we want seamless. Let's use DrawImage standard which stretches if we match dimensions
                         // To keep it simple for now: Draw full size
                         ctx.drawImage(vid, 0, 0, width, height);
                         
