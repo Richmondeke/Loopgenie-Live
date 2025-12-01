@@ -6,7 +6,8 @@ export enum AppView {
   SETTINGS = 'SETTINGS',
   HELP = 'HELP',
   ADMIN = 'ADMIN',
-  ADMIN_USERS = 'ADMIN_USERS'
+  ADMIN_USERS = 'ADMIN_USERS',
+  INTEGRATIONS = 'INTEGRATIONS'
 }
 
 export enum ProjectStatus {
@@ -124,6 +125,24 @@ export interface ShortMakerManifest {
   generated_audio_url?: string;
   generated_video_url?: string;
   status?: "created" | "story_ready" | "images_processing" | "audio_processing" | "assembling" | "completed" | "failed";
+}
+
+// --- Social Integration Types ---
+export interface ScheduledPost {
+  id: string;
+  content: string;
+  platform: 'twitter' | 'linkedin' | 'instagram';
+  scheduledAt: number; // Timestamp
+  status: 'scheduled' | 'posted' | 'failed';
+  mediaUrl?: string;
+}
+
+export interface IntegrationStatus {
+  id: 'twitter' | 'linkedin' | 'instagram';
+  name: string;
+  connected: boolean;
+  username?: string;
+  avatarUrl?: string;
 }
 
 // --- CENTRALIZED COST CONFIGURATION ---

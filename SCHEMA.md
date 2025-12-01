@@ -66,7 +66,58 @@ If you prefer to set up your Supabase database manually using the Table Editor, 
 
 ---
 
-## 3. 🚨 Emergency Fix: Missing 'cost' Column
+## 3. Social Integrations Table (NEW)
+**Name:** `social_integrations`
+**Description:** Stores OAuth tokens or connection status for social platforms.
+
+| Column | Type | Default | Notes |
+|--------|------|---------|-------|
+| `id` | UUID | `gen_random_uuid()` | **Primary Key** |
+| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` |
+| `platform` | Text | - | 'twitter', 'linkedin', 'instagram' |
+| `access_token` | Text | - | Encrypted token (simulated for now) |
+| `username` | Text | - | Display name |
+| `avatar_url` | Text | - | Profile picture URL |
+| `connected` | Boolean | `true` | |
+| `created_at` | Timestamptz | `now()` | |
+
+**Constraint:**
+You MUST add a unique constraint on `(user_id, platform)` so you can connect/disconnect easily.
+```sql
+ALTER TABLE social_integrations ADD CONSTRAINT social_integrations_user_platform_key UNIQUE (user_id, platform);
+```
+
+### RLS Policies for Social Integrations
+1. **Enable RLS**
+2. **Policy "Users can manage own integrations":**
+   - Operation: ALL
+   - Using: `auth.uid() = user_id`
+
+---
+
+## 4. Social Posts Table (NEW)
+**Name:** `social_posts`
+**Description:** Stores scheduled and posted content.
+
+| Column | Type | Default | Notes |
+|--------|------|---------|-------|
+| `id` | Text | - | **Primary Key** (string format) |
+| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` |
+| `content` | Text | - | |
+| `platform` | Text | - | |
+| `scheduled_at` | Int8 | - | Timestamp |
+| `status` | Text | `'scheduled'` | 'scheduled', 'posted', 'failed' |
+| `created_at` | Timestamptz | `now()` | |
+
+### RLS Policies for Social Posts
+1. **Enable RLS**
+2. **Policy "Users can manage own posts":**
+   - Operation: ALL
+   - Using: `auth.uid() = user_id`
+
+---
+
+## 5. 🚨 Emergency Fix: Missing 'cost' Column
 **If you get "Could not find the 'cost' column" error, run this:**
 
 ```sql
@@ -79,7 +130,7 @@ NOTIFY pgrst, 'reload schema';
 
 ---
 
-## 4. 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
+## 6. 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
 **Run this SCRIPT if you see "infinite recursion detected in policy" errors.**
 
 ```sql
@@ -115,16 +166,7 @@ USING ( public.check_is_admin() = true );
 
 ---
 
-## 5. "Fix Everything" / Full Setup Script
-**Run this to fully reset/setup the database with correct structure.**
-
-```sql
--- (Content from previous step truncated for brevity, use the blocks above/below)
-```
-
----
-
-## 6. 📦 Storage Setup (Run this to fix 42710 Error)
+## 7. 📦 Storage Setup (Run this to fix 42710 Error)
 **Creates the storage bucket for permanent video files.**
 
 ```sql
@@ -158,23 +200,4 @@ with check (
   bucket_id = 'assets' AND
   (storage.foldername(name))[1] = auth.uid()::text
 );
-```
-
----
-
-## 7. ⚡ Performance Tuning (Fix 500 Errors)
-**Run this to create indexes and speed up project loading by 10x.**
-
-```sql
--- 1. Index User ID for faster "My Projects" lookups
-CREATE INDEX IF NOT EXISTS idx_projects_user_id 
-ON public.projects(user_id);
-
--- 2. Index Creation Date for faster sorting
-CREATE INDEX IF NOT EXISTS idx_projects_created_at 
-ON public.projects(created_at DESC);
-
--- 3. Index Status for filtering failed/completed jobs
-CREATE INDEX IF NOT EXISTS idx_projects_status 
-ON public.projects(status);
 ```

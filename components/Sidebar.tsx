@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle, ShieldCheck, Users, Sun, Moon } from 'lucide-react';
+import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle, ShieldCheck, Users, Sun, Moon, Share2 } from 'lucide-react';
 import { AppView } from '../types';
 
 interface SidebarProps {
@@ -97,6 +98,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
             current={currentView}
             icon={<FolderOpen />}
             label="My Projects"
+            onClick={onChangeView}
+          />
+          <NavItem
+            view={AppView.INTEGRATIONS}
+            current={currentView}
+            icon={<Share2 />}
+            label="Integrations"
             onClick={onChangeView}
           />
 

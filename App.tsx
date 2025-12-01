@@ -10,6 +10,7 @@ import { LandingPage } from './components/LandingPage';
 import { UpdatePassword } from './components/UpdatePassword';
 import { UpgradeModal } from './components/UpgradeModal';
 import { AdminDashboard } from './components/AdminDashboard';
+import { Integrations } from './components/Integrations';
 import { AppView, Template, Project, ProjectStatus } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
 import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits } from './services/projectService';
@@ -349,6 +350,8 @@ const App: React.FC = () => {
                 setHeyGenKey={setHeyGenKey} 
             />
         );
+      case AppView.INTEGRATIONS:
+        return <Integrations />;
       case AppView.ASSETS:
         return <div className="flex items-center justify-center h-full text-gray-400">Assets Management (Coming Soon)</div>;
       case AppView.HELP:
