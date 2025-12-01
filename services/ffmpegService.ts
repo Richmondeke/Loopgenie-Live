@@ -40,7 +40,6 @@ const drawCaptions = (
     if (!text) return;
 
     // SCALING: Base logic on 1080p (1920x1080 or 1080x1920)
-    // We use the smaller dimension to determine scale to keep text readable on portrait/landscape
     const referenceDimension = 1080; 
     const currentMinDimension = Math.min(width, height);
     const scaleFactor = currentMinDimension / referenceDimension;
@@ -76,9 +75,6 @@ const drawCaptions = (
     }
     lines.push(currentLine);
 
-    // Limit to 2 lines for aesthetics (optional, but requested "Max 2 lines")
-    // If more, we usually just show the first 2 or let it grow. Let's let it grow but typically it should be short.
-    
     // CALCULATE BOX DIMENSIONS
     const totalTextHeight = lines.length * lineHeight;
     const boxWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0) + (padding * 2);
@@ -96,7 +92,6 @@ const drawCaptions = (
     // DRAW BACKGROUND BOX (Rounded Rect)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // 60% Opacity Black
     
-    // Custom rounded rect path
     ctx.beginPath();
     ctx.moveTo(boxX + cornerRadius, boxY);
     ctx.lineTo(boxX + boxWidth - cornerRadius, boxY);
@@ -110,15 +105,11 @@ const drawCaptions = (
     ctx.closePath();
     ctx.fill();
 
-    // Reset Shadow for Text (Optional, or keep it for pop)
-    // We keep shadow for text as well for readability
+    // Reset Shadow for Text
     ctx.fillStyle = '#FFFFFF';
     
     // DRAW TEXT
-    // Center text vertically within the box
     let textY = boxY + padding + (lineHeight / 2); // First line center
-    // Adjustment if we want exact middle of box:
-    // textY = boxY + (boxHeight / 2) - ((lines.length - 1) * lineHeight / 2);
     
     lines.forEach((line, index) => {
         ctx.fillText(line, width / 2, textY + (index * lineHeight));
@@ -127,10 +118,6 @@ const drawCaptions = (
 
 /**
  * Stitches images and audio into a video CLIENT-SIDE using HTML5 Canvas and MediaRecorder.
- * Features:
- * - Ken Burns Effect (Slow Zoom)
- * - Professional Captioning
- * - Audio Mixing (Narration + Background Music)
  */
 export const stitchVideoFrames = async (
   scenes: VideoScene[], 
@@ -138,9 +125,9 @@ export const stitchVideoFrames = async (
   durationPerImageMs: number = 5000,
   targetWidth?: number,
   targetHeight?: number,
-  backgroundAudioUrl?: string // New Parameter
+  backgroundAudioUrl?: string
 ): Promise<string> => {
-  console.log("Starting client-side video stitching with Ken Burns, Captions & BG Music...");
+  console.log("Starting client-side video stitching...");
 
   return new Promise(async (resolve, reject) => {
     // Safety timeout - Increased to 10 minutes (600,000ms)
@@ -228,7 +215,6 @@ export const stitchVideoFrames = async (
 
             } catch (e) {
                 console.error("Error preparing audio context:", e);
-                // Continue without audio if critical failure
             }
         }
 
@@ -243,7 +229,6 @@ export const stitchVideoFrames = async (
         
         const combinedStream = new MediaStream(combinedTracks);
         
-        // Supported MimeTypes lookup
         const mimeTypes = [
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
@@ -254,7 +239,7 @@ export const stitchVideoFrames = async (
 
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 3500000 // 3.5 Mbps (Optimized for upload size)
+            videoBitsPerSecond: 3500000 // 3.5 Mbps
         });
 
         const chunks: Blob[] = [];
@@ -266,10 +251,7 @@ export const stitchVideoFrames = async (
             clearTimeout(timeoutId);
             const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
             const url = URL.createObjectURL(blob);
-            
-            // Cleanup Audio Context
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
-            
             resolve(url);
         };
 
@@ -284,10 +266,20 @@ export const stitchVideoFrames = async (
         // Animation Loop Variables
         const fps = 30;
         const framesPerScene = Math.ceil((durationPerImageMs / 1000) * fps);
+        const maxTotalFrames = (framesPerScene * scenes.length) + (fps * 2); // Hard limit: Duration + 2s buffer
+        
         let currentSceneIdx = 0;
         let currentFrameInScene = 0;
+        let totalFramesRendered = 0;
         
         const drawFrame = () => {
+            // Safety: Stop if we exceed max expected frames (prevents 9-min infinite loop)
+            if (totalFramesRendered > maxTotalFrames) {
+                console.warn("Force stopping recorder: Exceeded expected duration.");
+                recorder.stop();
+                return;
+            }
+
             if (currentSceneIdx >= scenes.length) {
                 recorder.stop();
                 return;
@@ -297,13 +289,10 @@ export const stitchVideoFrames = async (
             const text = scenes[currentSceneIdx].text;
             
             // --- Ken Burns Effect Logic ---
-            // We scale from 1.0 to 1.15 over the duration of the scene
             const progress = currentFrameInScene / framesPerScene;
             const scale = 1.0 + (progress * 0.15); 
             
-            // We alternate pan direction based on even/odd scene
             const panDirection = currentSceneIdx % 2 === 0 ? 1 : -1;
-            // Max pan pixels (e.g. 5% of width)
             const maxPanX = width * 0.05;
             const translateX = (progress * maxPanX * panDirection) - (panDirection > 0 ? 0 : maxPanX);
 
@@ -313,15 +302,11 @@ export const stitchVideoFrames = async (
 
             // Draw Image with Transform
             ctx.save();
-            
-            // Center origin for scaling
             ctx.translate(width / 2, height / 2);
             ctx.scale(scale, scale);
             ctx.translate(-width / 2, -height / 2);
-            // Apply slight pan
             ctx.translate(translateX, 0);
 
-            // Draw Image (Cover fit)
             const imgRatio = img.naturalWidth / img.naturalHeight;
             const canvasRatio = width / height;
             let renderW, renderH, offsetX, offsetY;
@@ -345,12 +330,13 @@ export const stitchVideoFrames = async (
 
             // Loop Logic
             currentFrameInScene++;
+            totalFramesRendered++;
+            
             if (currentFrameInScene >= framesPerScene) {
                 currentSceneIdx++;
                 currentFrameInScene = 0;
             }
 
-            // Next frame
             setTimeout(() => drawFrame(), 1000 / fps);
         };
 
@@ -480,13 +466,23 @@ export const concatenateVideos = async (
                 const vid = await loadVideo(url);
                 await vid.play();
                 
+                // Safety: If video has no duration or is Infinite, use sane fallback
+                // This prevents hanging if 'ended' event doesn't fire
+                const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 15;
+
                 // Draw loop for this video
                 await new Promise<void>(res => {
+                    const startTime = Date.now();
+                    
                     const draw = () => {
-                        if (vid.paused || vid.ended) {
+                        const elapsed = (Date.now() - startTime) / 1000;
+                        
+                        // Strict safety check: End if paused, ended, OR elapsed time > duration + 1s buffer
+                        if (vid.paused || vid.ended || elapsed > safeDuration + 1) {
                             res();
                             return;
                         }
+                        
                         // Draw fit cover
                         const imgRatio = vid.videoWidth / vid.videoHeight;
                         const canvasRatio = width / height;
@@ -508,12 +504,7 @@ export const concatenateVideos = async (
     });
 };
 
-/**
- * Cropping helper for Avatar videos (Client-Side)
- */
 export const cropVideo = async (videoUrl: string, targetW: number, targetH: number): Promise<string> => {
-    // Re-uses the merge logic but with different canvas size and offset
-    // Simplified version:
     return new Promise(async (resolve, reject) => {
         try {
             const video = await loadVideo(videoUrl);
@@ -524,16 +515,13 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
             if(!ctx) throw new Error("No ctx");
 
             const stream = canvas.captureStream(30);
-            // Capture audio from video element if cross-origin allows, else silent
-            // For HeyGen, we usually get a URL that allows cross-origin
-            // Ideally we use Web Audio API to route video audio to destination
             
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const actx = new AudioContextClass();
             const dest = actx.createMediaStreamDestination();
             const source = actx.createMediaElementSource(video);
             source.connect(dest);
-            source.connect(actx.destination); // Optional: hear it while processing
+            source.connect(actx.destination);
 
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
             const combined = new MediaStream(tracks);
@@ -555,7 +543,6 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
                     recorder.stop();
                     return;
                 }
-                // Center crop
                 const sx = (video.videoWidth - targetW)/2;
                 const sy = (video.videoHeight - targetH)/2;
                 ctx.drawImage(video, sx, sy, targetW, targetH, 0, 0, targetW, targetH);
