@@ -1,8 +1,7 @@
 
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
-import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, Image as ImageIcon, ChevronDown, FileVideo, Loader2 } from 'lucide-react';
-import { transcodeVideo } from '../services/ffmpegService';
+import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon } from 'lucide-react';
 
 interface ProjectListProps {
   projects: Project[];
@@ -13,12 +12,10 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
   const [selectedItem, setSelectedItem] = useState<{ url: string; name: string; type: string } | null>(null);
   const [activeCategory, setActiveCategory] = useState<'ALL' | 'STORYBOOK' | 'SHORTS' | 'AVATAR' | 'FASHION'>('ALL');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [downloadMenuId, setDownloadMenuId] = useState<string | null>(null);
-  const [isConverting, setIsConverting] = useState<string | null>(null);
 
   // Filter projects based on category
   const filteredProjects = projects.filter(p => {
-      if (activeCategory === 'ALL') return true;
+      if (activeCategory === 'ALL') return true; // Show everything
       if (activeCategory === 'STORYBOOK') return p.type === 'STORYBOOK';
       if (activeCategory === 'SHORTS') return p.type === 'SHORTS' || p.type === 'UGC_PRODUCT' || p.type === 'TEXT_TO_VIDEO' || p.type === 'IMAGE_TO_VIDEO';
       if (activeCategory === 'AVATAR') return p.type === 'AVATAR' || p.type === 'AUDIOBOOK';
@@ -26,6 +23,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
       return false;
   });
 
+  // Status Badge Component
   const StatusBadge = ({ status }: { status: ProjectStatus }) => {
     switch (status) {
       case ProjectStatus.COMPLETED:
@@ -49,53 +47,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
   const handleRefresh = async () => {
       setIsRefreshing(true);
       await onPollStatus();
-      setTimeout(() => setIsRefreshing(false), 800);
-  };
-
-  const downloadFile = (url: string, filename: string) => {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-  };
-
-  const handleDownloadChoice = async (project: Project, format: 'ORIGINAL' | 'MP4' | 'WEBM') => {
-      setDownloadMenuId(null);
-      if (!project.videoUrl) return;
-
-      if (format === 'ORIGINAL') {
-          // Guess extension if possible, default to webm
-          const ext = project.videoUrl.includes('.mp4') ? 'mp4' : 'webm';
-          downloadFile(project.videoUrl, `${project.templateName.replace(/\s+/g, '_')}_${project.id}.${ext}`);
-          return;
-      }
-
-      if (format === 'MP4') {
-          // If already MP4 url? hard to check blobi
-          // Just force conversion to be safe
-          setIsConverting(project.id);
-          try {
-              const newUrl = await transcodeVideo(project.videoUrl, 'video/mp4');
-              downloadFile(newUrl, `${project.templateName.replace(/\s+/g, '_')}_${project.id}.mp4`);
-          } catch (e) {
-              alert("Conversion to MP4 failed or not supported by this browser. Downloading original.");
-              downloadFile(project.videoUrl, `${project.templateName}_${project.id}.webm`);
-          } finally {
-              setIsConverting(null);
-          }
-      } else if (format === 'WEBM') {
-          setIsConverting(project.id);
-          try {
-              const newUrl = await transcodeVideo(project.videoUrl, 'video/webm');
-              downloadFile(newUrl, `${project.templateName.replace(/\s+/g, '_')}_${project.id}.webm`);
-          } catch (e) {
-              downloadFile(project.videoUrl, `${project.templateName}_${project.id}.webm`);
-          } finally {
-              setIsConverting(null);
-          }
-      }
+      setTimeout(() => setIsRefreshing(false), 800); // Visual feedback min duration
   };
 
   const categories = [
@@ -108,7 +60,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
 
   return (
     <>
-      <div className="h-full flex flex-col p-4 md:p-8" onClick={() => setDownloadMenuId(null)}>
+      <div className="h-full flex flex-col p-4 md:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <div>
               <h2 className="text-2xl font-bold text-gray-900 dark:text-white">My Projects</h2>
@@ -123,6 +75,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
           </button>
         </div>
 
+        {/* Category Tabs */}
         <div className="w-full mb-8">
             <div className="flex gap-3 overflow-x-auto pb-4 px-1 no-scrollbar snap-x">
                 {categories.map(cat => (
@@ -147,7 +100,14 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                   <Clock size={32} className="text-gray-300 dark:text-gray-500" />
               </div>
               <p className="font-bold text-gray-600 dark:text-gray-300 text-lg">No projects found</p>
-              <button onClick={handleRefresh} className="mt-4 text-indigo-600 dark:text-indigo-400 font-bold text-sm hover:underline">Refresh List</button>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                  {activeCategory === 'ALL' 
+                    ? "Create your first video from the Templates tab." 
+                    : `No projects in the ${activeCategory.toLowerCase()} category.`}
+              </p>
+              <button onClick={handleRefresh} className="mt-4 text-indigo-600 dark:text-indigo-400 font-bold text-sm hover:underline">
+                  Refresh List
+              </button>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto pb-10 pr-2">
@@ -155,11 +115,22 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                   {filteredProjects.map(project => (
                       <div key={project.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-5 hover:shadow-lg transition-all duration-300 group">
                           <div className="w-full sm:w-40 aspect-video bg-gray-100 dark:bg-gray-900 rounded-xl overflow-hidden flex-shrink-0 relative shadow-inner border border-gray-100 dark:border-gray-700">
-                              <img src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} alt="Thumbnail" className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" />
+                              <img 
+                                  src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} 
+                                  alt="Thumbnail" 
+                                  className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" 
+                              />
                               {project.status === ProjectStatus.COMPLETED && project.videoUrl && (
-                                  <button onClick={(e) => handleOpenItem(e, project)} className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors cursor-pointer">
+                                  <button 
+                                      onClick={(e) => handleOpenItem(e, project)}
+                                      className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors cursor-pointer"
+                                  >
                                       <div className="bg-white/90 rounded-full p-3 shadow-lg transform scale-90 group-hover:scale-100 transition-transform hover:bg-white">
-                                         {project.type === 'FASHION_SHOOT' ? <ImageIcon className="text-rose-600" size={20} /> : <Play className="text-indigo-600 fill-current ml-0.5" size={20}/>}
+                                         {project.type === 'FASHION_SHOOT' ? (
+                                             <ImageIcon className="text-rose-600" size={20} />
+                                         ) : (
+                                             <Play className="text-indigo-600 fill-current ml-0.5" size={20}/>
+                                         )}
                                       </div>
                                   </button>
                               )}
@@ -173,59 +144,45 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                               <div className="flex items-center justify-center sm:justify-start gap-3 mb-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
                                   <span className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300 text-xs uppercase tracking-wide font-bold">{project.type?.replace('_', ' ')}</span>
                                   <span>• {new Date(project.createdAt).toLocaleDateString()}</span>
+                                  {project.cost && <span>• {project.cost} Credits</span>}
                               </div>
+                              
                               {project.error && (
-                                  <div className="text-xs text-red-600 dark:text-red-400 mt-2 bg-red-50 dark:bg-red-900/20 px-3 py-1.5 rounded-lg inline-flex items-center gap-2 max-w-full"><AlertOctagon size={12} /><span className="truncate">{project.error}</span></div>
+                                  <div className="text-xs text-red-600 dark:text-red-400 mt-2 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 px-3 py-1.5 rounded-lg inline-flex items-center gap-2 max-w-full">
+                                      <AlertOctagon size={12} />
+                                      <span className="truncate">{project.error}</span>
+                                  </div>
                               )}
                           </div>
 
                           <div className="flex items-center gap-3 w-full sm:w-auto justify-center">
                               {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
                                 <>
-                                    <button onClick={(e) => handleOpenItem(e, project)} className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-50 dark:hover:bg-gray-600 transition-all shadow-sm">
-                                        {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />} <span>View</span>
+                                    <button 
+                                        onClick={(e) => handleOpenItem(e, project)}
+                                        className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-50 dark:hover:bg-gray-600 transition-all shadow-sm"
+                                    >
+                                        {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />}
+                                        <span>View</span>
                                     </button>
-                                    
-                                    {project.type === 'FASHION_SHOOT' ? (
-                                        <a href={project.videoUrl} target="_blank" rel="noopener noreferrer" download={`project-${project.id}.png`} className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-sm">
-                                            <Download size={16} /> Download
-                                        </a>
-                                    ) : (
-                                        <div className="relative">
-                                            {isConverting === project.id ? (
-                                                <div className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600/10 border border-indigo-600 text-indigo-600 rounded-xl text-sm font-bold cursor-wait">
-                                                    <Loader2 size={16} className="animate-spin" /> Converting...
-                                                </div>
-                                            ) : (
-                                                <button 
-                                                    onClick={(e) => { e.stopPropagation(); setDownloadMenuId(downloadMenuId === project.id ? null : project.id); }}
-                                                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md transition-all shadow-sm"
-                                                >
-                                                    <Download size={16} /> Download <ChevronDown size={14} className={`transition-transform ${downloadMenuId === project.id ? 'rotate-180' : ''}`} />
-                                                </button>
-                                            )}
-                                            
-                                            {downloadMenuId === project.id && (
-                                                <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                                                    <div className="px-3 py-2 text-xs font-bold text-gray-400 uppercase tracking-wider bg-gray-50 dark:bg-gray-900/50">Select Format</div>
-                                                    <button onClick={() => handleDownloadChoice(project, 'ORIGINAL')} className="w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
-                                                        <FileVideo size={16} className="text-gray-400" /> Original
-                                                    </button>
-                                                    <button onClick={() => handleDownloadChoice(project, 'MP4')} className="w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
-                                                        <FileVideo size={16} className="text-indigo-500" /> MP4 Video
-                                                    </button>
-                                                    <button onClick={() => handleDownloadChoice(project, 'WEBM')} className="w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2">
-                                                        <FileVideo size={16} className="text-pink-500" /> WebM Video
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
+                                    <a 
+                                        href={project.videoUrl} 
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        download={`project-${project.id}.${project.type === 'FASHION_SHOOT' ? 'png' : 'mp4'}`}
+                                        className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all shadow-sm w-full sm:w-auto justify-center"
+                                    >
+                                        <Download size={16} />
+                                        <span className="sm:hidden">Download</span>
+                                        <span className="hidden sm:inline">Download</span>
+                                    </a>
                                 </>
                               ) : project.status === ProjectStatus.FAILED ? (
-                                 <div className="text-red-500 font-medium text-sm bg-red-50 dark:bg-red-900/20 px-4 py-2 rounded-xl">Failed</div>
+                                 <div className="text-red-500 font-medium text-sm bg-red-50 dark:bg-red-900/20 px-4 py-2 rounded-xl border border-red-100 dark:border-red-900/30">Failed</div>
                               ) : (
-                                 <div className="w-32 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 animate-pulse w-2/3 rounded-full"></div></div>
+                                 <div className="w-32 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                                      <div className="h-full bg-indigo-500 animate-pulse w-2/3 rounded-full"></div>
+                                 </div>
                               )}
                           </div>
                       </div>
@@ -234,17 +191,38 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
           </div>
         )}
       </div>
-      
-      {/* Modal ... (omitted, same as before) */}
+
+      {/* Media Viewer Modal Overlay */}
       {selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="relative w-full max-w-6xl bg-black rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh] border border-gray-800">
+             {/* Header */}
              <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/90 to-transparent pointer-events-none">
                 <h3 className="text-white font-bold text-xl drop-shadow-md pointer-events-auto">{selectedItem.name}</h3>
-                <button onClick={() => setSelectedItem(null)} className="bg-black/50 hover:bg-white/20 text-white rounded-full p-2.5 backdrop-blur-md transition-colors border border-white/10 pointer-events-auto"><X size={24} /></button>
+                <button 
+                  onClick={() => setSelectedItem(null)}
+                  className="bg-black/50 hover:bg-white/20 text-white rounded-full p-2.5 backdrop-blur-md transition-colors border border-white/10 pointer-events-auto"
+                >
+                  <X size={24} />
+                </button>
              </div>
+
+             {/* Player / Viewer */}
              <div className="flex-1 bg-black flex items-center justify-center relative p-4">
-                {selectedItem.type === 'FASHION_SHOOT' ? <img src={selectedItem.url} alt={selectedItem.name} className="max-w-full max-h-[85vh] w-auto h-auto object-contain rounded-lg shadow-2xl" /> : <video src={selectedItem.url} controls autoPlay className="max-w-full max-h-[85vh] w-auto h-auto outline-none rounded-lg shadow-2xl" />}
+                {selectedItem.type === 'FASHION_SHOOT' ? (
+                    <img 
+                        src={selectedItem.url} 
+                        alt={selectedItem.name}
+                        className="max-w-full max-h-[85vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+                    />
+                ) : (
+                    <video 
+                      src={selectedItem.url} 
+                      controls 
+                      autoPlay 
+                      className="max-w-full max-h-[85vh] w-auto h-auto outline-none rounded-lg shadow-2xl"
+                    />
+                )}
              </div>
           </div>
         </div>

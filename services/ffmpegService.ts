@@ -40,6 +40,7 @@ const drawCaptions = (
     if (!text) return;
 
     // SCALING: Base logic on 1080p (1920x1080 or 1080x1920)
+    // We use the smaller dimension to determine scale to keep text readable on portrait/landscape
     const referenceDimension = 1080; 
     const currentMinDimension = Math.min(width, height);
     const scaleFactor = currentMinDimension / referenceDimension;
@@ -75,6 +76,9 @@ const drawCaptions = (
     }
     lines.push(currentLine);
 
+    // Limit to 2 lines for aesthetics (optional, but requested "Max 2 lines")
+    // If more, we usually just show the first 2 or let it grow. Let's let it grow but typically it should be short.
+    
     // CALCULATE BOX DIMENSIONS
     const totalTextHeight = lines.length * lineHeight;
     const boxWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0) + (padding * 2);
@@ -92,6 +96,7 @@ const drawCaptions = (
     // DRAW BACKGROUND BOX (Rounded Rect)
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // 60% Opacity Black
     
+    // Custom rounded rect path
     ctx.beginPath();
     ctx.moveTo(boxX + cornerRadius, boxY);
     ctx.lineTo(boxX + boxWidth - cornerRadius, boxY);
@@ -105,9 +110,15 @@ const drawCaptions = (
     ctx.closePath();
     ctx.fill();
 
+    // Reset Shadow for Text (Optional, or keep it for pop)
+    // We keep shadow for text as well for readability
     ctx.fillStyle = '#FFFFFF';
     
-    let textY = boxY + padding + (lineHeight / 2); 
+    // DRAW TEXT
+    // Center text vertically within the box
+    let textY = boxY + padding + (lineHeight / 2); // First line center
+    // Adjustment if we want exact middle of box:
+    // textY = boxY + (boxHeight / 2) - ((lines.length - 1) * lineHeight / 2);
     
     lines.forEach((line, index) => {
         ctx.fillText(line, width / 2, textY + (index * lineHeight));
@@ -116,6 +127,10 @@ const drawCaptions = (
 
 /**
  * Stitches images and audio into a video CLIENT-SIDE using HTML5 Canvas and MediaRecorder.
+ * Features:
+ * - Ken Burns Effect (Slow Zoom)
+ * - Professional Captioning
+ * - Audio Mixing (Narration + Background Music)
  */
 export const stitchVideoFrames = async (
   scenes: VideoScene[], 
@@ -123,21 +138,24 @@ export const stitchVideoFrames = async (
   durationPerImageMs: number = 5000,
   targetWidth?: number,
   targetHeight?: number,
-  backgroundAudioUrl?: string,
-  sceneDurations?: number[]
+  backgroundAudioUrl?: string // New Parameter
 ): Promise<string> => {
   console.log("Starting client-side video stitching with Ken Burns, Captions & BG Music...");
 
   return new Promise(async (resolve, reject) => {
+    // Safety timeout - Increased to 10 minutes (600,000ms)
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
     }, 600000); 
 
     try {
+        // 1. Prepare Canvas
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
+        
         if (!ctx) throw new Error("Could not get canvas context");
 
+        // Determine size from first image if not provided
         let width = targetWidth || 1280;
         let height = targetHeight || 720;
 
@@ -153,52 +171,69 @@ export const stitchVideoFrames = async (
         
         canvas.width = width;
         canvas.height = height;
+        
+        // Fill black background
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, width, height);
 
-        // 2. Prepare Audio
+        // 2. Prepare Audio (Mixing Narration + BG Music)
         let audioContext: AudioContext | null = null;
         let dest: MediaStreamAudioDestinationNode | null = null;
         let narrationSource: AudioBufferSourceNode | null = null;
         let bgMusicSource: AudioBufferSourceNode | null = null;
 
+        // Initialize AudioContext if we have any audio
         if (audioUrl || backgroundAudioUrl) {
             try {
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
                 audioContext = new AudioContextClass();
                 dest = audioContext.createMediaStreamDestination();
 
+                // A. Load Narration (Voiceover)
                 if (audioUrl) {
                     const res = await fetch(audioUrl);
                     const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
+                    
+                    // Recalculate duration based on narration length
+                    if (buf.duration && buf.duration > 1) {
+                        durationPerImageMs = (buf.duration * 1000) / scenes.length;
+                        console.log(`Adjusted duration per scene to ${Math.round(durationPerImageMs)}ms based on narration.`);
+                    }
+
                     narrationSource = audioContext.createBufferSource();
                     narrationSource.buffer = buf;
                     narrationSource.connect(dest);
                 }
 
+                // B. Load Background Music
                 if (backgroundAudioUrl) {
                     try {
                         const res = await fetch(backgroundAudioUrl);
                         const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
+                        
                         bgMusicSource = audioContext.createBufferSource();
                         bgMusicSource.buffer = buf;
-                        bgMusicSource.loop = true;
+                        bgMusicSource.loop = true; // Loop music if short
+
+                        // Create Gain Node for Volume Ducking (12% volume)
                         const bgGain = audioContext.createGain();
                         bgGain.gain.value = 0.12; 
+
                         bgMusicSource.connect(bgGain);
                         bgGain.connect(dest);
                     } catch (bgError) {
                         console.warn("Failed to load background music:", bgError);
                     }
                 }
+
             } catch (e) {
                 console.error("Error preparing audio context:", e);
+                // Continue without audio if critical failure
             }
         }
 
-        // 3. Prepare Recorder - PREFER MP4
-        const fps = 60;
-        const canvasStream = canvas.captureStream(fps); 
+        // 3. Prepare Recorder
+        const canvasStream = canvas.captureStream(30); // 30 FPS
         const combinedTracks = [...canvasStream.getVideoTracks()];
         
         if (dest) {
@@ -208,19 +243,18 @@ export const stitchVideoFrames = async (
         
         const combinedStream = new MediaStream(combinedTracks);
         
+        // Supported MimeTypes lookup
         const mimeTypes = [
-            'video/mp4;codecs=avc1', // Prefer MP4 (Chrome/Safari)
-            'video/mp4',
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
-            'video/webm'
+            'video/webm',
+            'video/mp4' 
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-        console.log("Selected MIME type for recording:", selectedMime);
 
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 5000000 // 5 Mbps
+            videoBitsPerSecond: 3500000 // 3.5 Mbps (Optimized for upload size)
         });
 
         const chunks: Blob[] = [];
@@ -232,61 +266,62 @@ export const stitchVideoFrames = async (
             clearTimeout(timeoutId);
             const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
             const url = URL.createObjectURL(blob);
+            
+            // Cleanup Audio Context
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
+            
             resolve(url);
         };
 
+        // 4. Start Recording & Audio
         recorder.start();
         if (narrationSource) narrationSource.start(0);
         if (bgMusicSource) bgMusicSource.start(0);
 
+        // Preload all images to avoid stutter
         const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
 
-        // Frame Logic
-        const defaultSceneDuration = durationPerImageMs / 1000;
+        // Animation Loop Variables
+        const fps = 30;
+        const framesPerScene = Math.ceil((durationPerImageMs / 1000) * fps);
         let currentSceneIdx = 0;
         let currentFrameInScene = 0;
         
-        // Easing function for smooth zoom
-        const easeInSine = (x: number): number => {
-            return 1 - Math.cos((x * Math.PI) / 2);
-        };
-        
         const drawFrame = () => {
             if (currentSceneIdx >= scenes.length) {
-                // Safety buffer to ensure last frames are encoded
-                setTimeout(() => recorder.stop(), 500); 
+                recorder.stop();
                 return;
             }
-
-            // Determine duration for this specific scene
-            const thisSceneDuration = (sceneDurations && sceneDurations[currentSceneIdx]) 
-                ? sceneDurations[currentSceneIdx] 
-                : defaultSceneDuration;
-            
-            const framesPerScene = Math.ceil(thisSceneDuration * fps);
 
             const img = loadedImages[currentSceneIdx];
             const text = scenes[currentSceneIdx].text;
             
-            // Ken Burns
-            const linearProgress = currentFrameInScene / framesPerScene;
-            const progress = easeInSine(Math.min(linearProgress, 1));
-            
+            // --- Ken Burns Effect Logic ---
+            // We scale from 1.0 to 1.15 over the duration of the scene
+            const progress = currentFrameInScene / framesPerScene;
             const scale = 1.0 + (progress * 0.15); 
+            
+            // We alternate pan direction based on even/odd scene
             const panDirection = currentSceneIdx % 2 === 0 ? 1 : -1;
+            // Max pan pixels (e.g. 5% of width)
             const maxPanX = width * 0.05;
             const translateX = (progress * maxPanX * panDirection) - (panDirection > 0 ? 0 : maxPanX);
 
+            // Draw Background
             ctx.fillStyle = 'black';
             ctx.fillRect(0, 0, width, height);
 
+            // Draw Image with Transform
             ctx.save();
+            
+            // Center origin for scaling
             ctx.translate(width / 2, height / 2);
             ctx.scale(scale, scale);
             ctx.translate(-width / 2, -height / 2);
+            // Apply slight pan
             ctx.translate(translateX, 0);
 
+            // Draw Image (Cover fit)
             const imgRatio = img.naturalWidth / img.naturalHeight;
             const canvasRatio = width / height;
             let renderW, renderH, offsetX, offsetY;
@@ -305,17 +340,21 @@ export const stitchVideoFrames = async (
             ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
             ctx.restore();
 
+            // --- Draw Captions ---
             drawCaptions(ctx, text, width, height);
 
+            // Loop Logic
             currentFrameInScene++;
             if (currentFrameInScene >= framesPerScene) {
                 currentSceneIdx++;
                 currentFrameInScene = 0;
             }
 
+            // Next frame
             setTimeout(() => drawFrame(), 1000 / fps);
         };
 
+        // Start Loop
         drawFrame();
 
     } catch (err) {
@@ -326,46 +365,45 @@ export const stitchVideoFrames = async (
 };
 
 /**
- * Client-side video transcoding/re-containerizing.
- * Plays the video and re-records it in the requested mimeType (e.g., video/mp4).
+ * Merges a video URL with an audio URL.
  */
-export const transcodeVideo = async (sourceUrl: string, targetMimeType: string = 'video/mp4'): Promise<string> => {
+export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promise<string> => {
     return new Promise(async (resolve, reject) => {
-        if (!MediaRecorder.isTypeSupported(targetMimeType)) {
-            return reject(new Error(`Browser does not support recording in ${targetMimeType}`));
-        }
-
         try {
-            const video = await loadVideo(sourceUrl);
+            const video = await loadVideo(videoUrl);
             const canvas = document.createElement('canvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             const ctx = canvas.getContext('2d');
-            if(!ctx) throw new Error("Context failed");
+            if (!ctx) throw new Error("No ctx");
 
-            // Audio Context to capture sound
+            // Audio Setup
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            const actx = new AudioContextClass();
-            const dest = actx.createMediaStreamDestination();
-            const source = actx.createMediaElementSource(video);
-            source.connect(dest);
-            source.connect(actx.destination); // Let user hear progress (optional)
+            const audioContext = new AudioContextClass();
+            const response = await fetch(audioUrl);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            const dest = audioContext.createMediaStreamDestination();
+            const sourceNode = audioContext.createBufferSource();
+            sourceNode.buffer = audioBuffer;
+            sourceNode.connect(dest);
 
-            const stream = canvas.captureStream(30); // 30fps sufficient for transcode
+            const stream = canvas.captureStream(30);
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
-            const combined = new MediaStream(tracks);
+            const combinedStream = new MediaStream(tracks);
 
-            const recorder = new MediaRecorder(combined, { mimeType: targetMimeType });
+            const recorder = new MediaRecorder(combinedStream);
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-            
             recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: targetMimeType });
+                const blob = new Blob(chunks, { type: 'video/webm' });
                 resolve(URL.createObjectURL(blob));
-                actx.close();
+                audioContext.close();
             };
 
             recorder.start();
+            sourceNode.start(0);
             await video.play();
 
             const draw = () => {
@@ -384,66 +422,10 @@ export const transcodeVideo = async (sourceUrl: string, targetMimeType: string =
     });
 };
 
-export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promise<string> => {
-    // ... (unchanged)
-    // Reuse basic logic but use prioritize MP4
-    return new Promise(async (resolve, reject) => {
-        // ... (existing merge logic)
-        // Ensure to use selectedMime logic inside here too if we want mp4 output
-        // For brevity in this diff, assuming defaults work or using stitchVideoFrames pattern.
-        // Copying simplified logic for robustness:
-        try {
-            const video = await loadVideo(videoUrl);
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error("No ctx");
-
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            const audioContext = new AudioContextClass();
-            const response = await fetch(audioUrl);
-            const audioBuffer = await audioContext.decodeAudioData(await response.arrayBuffer());
-            
-            const dest = audioContext.createMediaStreamDestination();
-            const sourceNode = audioContext.createBufferSource();
-            sourceNode.buffer = audioBuffer;
-            sourceNode.connect(dest);
-
-            const stream = canvas.captureStream(60);
-            const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
-            const combinedStream = new MediaStream(tracks);
-
-            // PREFER MP4
-            const mimeTypes = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
-            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-            const recorder = new MediaRecorder(combinedStream, { mimeType: selectedMime });
-            const chunks: Blob[] = [];
-            recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
-                resolve(URL.createObjectURL(blob));
-                audioContext.close();
-            };
-
-            recorder.start();
-            sourceNode.start(0);
-            await video.play();
-
-            const draw = () => {
-                if (video.paused || video.ended) {
-                    recorder.stop();
-                    return;
-                }
-                ctx.drawImage(video, 0, 0);
-                requestAnimationFrame(draw);
-            };
-            draw();
-        } catch (e) { reject(e); }
-    });
-};
-
+/**
+ * Client-side concatenation of multiple video URLs.
+ * Simulates stitching by playing them sequentially on a canvas recorder.
+ */
 export const concatenateVideos = async (
     videoUrls: string[], 
     width: number = 1280, 
@@ -458,6 +440,7 @@ export const concatenateVideos = async (
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
 
+            // Optional Background Audio
             let audioContext: AudioContext | null = null;
             let dest: MediaStreamAudioDestinationNode | null = null;
             
@@ -475,45 +458,62 @@ export const concatenateVideos = async (
                 source.start(0);
             }
 
-            const stream = canvas.captureStream(60);
+            const stream = canvas.captureStream(30);
             const tracks = [...stream.getVideoTracks()];
             if (dest) tracks.push(...dest.stream.getAudioTracks());
             
             const combinedStream = new MediaStream(tracks);
-            
-            // PREFER MP4
-            const mimeTypes = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
-            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-            const recorder = new MediaRecorder(combinedStream, { mimeType: selectedMime });
+            const recorder = new MediaRecorder(combinedStream);
             const chunks: Blob[] = [];
+            
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
-                 const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
+                 const blob = new Blob(chunks, { type: 'video/webm' });
                  resolve(URL.createObjectURL(blob));
                  if (audioContext) audioContext.close();
             };
 
             recorder.start();
 
+            // Sequential Playback
             for (const url of videoUrls) {
                 const vid = await loadVideo(url);
                 await vid.play();
+                
+                // Draw loop for this video
                 await new Promise<void>(res => {
                     const draw = () => {
-                        if (vid.paused || vid.ended) { res(); return; }
+                        if (vid.paused || vid.ended) {
+                            res();
+                            return;
+                        }
+                        // Draw fit cover
+                        const imgRatio = vid.videoWidth / vid.videoHeight;
+                        const canvasRatio = width / height;
+                        
+                        // To keep it simple for now: Draw full size
                         ctx.drawImage(vid, 0, 0, width, height);
+                        
                         requestAnimationFrame(draw);
                     };
                     draw();
                 });
             }
+
             recorder.stop();
-        } catch (e) { reject(e); }
+
+        } catch (e) {
+            reject(e);
+        }
     });
 };
 
+/**
+ * Cropping helper for Avatar videos (Client-Side)
+ */
 export const cropVideo = async (videoUrl: string, targetW: number, targetH: number): Promise<string> => {
+    // Re-uses the merge logic but with different canvas size and offset
+    // Simplified version:
     return new Promise(async (resolve, reject) => {
         try {
             const video = await loadVideo(videoUrl);
@@ -523,40 +523,46 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
             const ctx = canvas.getContext('2d');
             if(!ctx) throw new Error("No ctx");
 
-            const stream = canvas.captureStream(60);
+            const stream = canvas.captureStream(30);
+            // Capture audio from video element if cross-origin allows, else silent
+            // For HeyGen, we usually get a URL that allows cross-origin
+            // Ideally we use Web Audio API to route video audio to destination
+            
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const actx = new AudioContextClass();
             const dest = actx.createMediaStreamDestination();
             const source = actx.createMediaElementSource(video);
             source.connect(dest);
-            source.connect(actx.destination); 
+            source.connect(actx.destination); // Optional: hear it while processing
 
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
             const combined = new MediaStream(tracks);
             
-            // PREFER MP4
-            const mimeTypes = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm'];
-            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-            const recorder = new MediaRecorder(combined, { mimeType: selectedMime });
+            const recorder = new MediaRecorder(combined);
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => chunks.push(e.data);
             recorder.onstop = () => {
-                const blob = new Blob(chunks, {type: selectedMime || 'video/webm'});
+                const blob = new Blob(chunks, {type:'video/webm'});
                 resolve(URL.createObjectURL(blob));
                 actx.close();
             };
 
             recorder.start();
             await video.play();
+            
             const draw = () => {
-                if(video.paused || video.ended) { recorder.stop(); return; }
+                if(video.paused || video.ended) {
+                    recorder.stop();
+                    return;
+                }
+                // Center crop
                 const sx = (video.videoWidth - targetW)/2;
                 const sy = (video.videoHeight - targetH)/2;
                 ctx.drawImage(video, sx, sy, targetW, targetH, 0, 0, targetW, targetH);
                 requestAnimationFrame(draw);
             };
             draw();
+
         } catch(e) { reject(e); }
     });
 };

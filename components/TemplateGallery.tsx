@@ -145,11 +145,18 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
     }
   ];
 
-  const filteredStudioTools = STUDIO_TOOLS.filter(t => t.title.toLowerCase().includes(searchQuery.toLowerCase()) || t.description.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredStudioTools = STUDIO_TOOLS.filter(t => 
+    (t.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+    (t.description || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   // AVATAR SELECTION VIEW
   if (view === 'AVATAR_SELECT') {
-      const filteredAvatars = avatars.filter(a => (genderFilter === 'ALL' || a.gender === genderFilter) && a.name.toLowerCase().includes(searchQuery.toLowerCase()));
+      const filteredAvatars = avatars.filter(a => 
+        (genderFilter === 'ALL' || a.gender === genderFilter) && 
+        (a.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+      );
+      
       return (
         <div className="h-full flex flex-col p-4 md:p-8 overflow-hidden">
             <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between flex-shrink-0 gap-4">

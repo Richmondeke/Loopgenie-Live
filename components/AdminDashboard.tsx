@@ -95,7 +95,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
     if (loading) return <div className="p-10 text-center text-gray-500 animate-pulse">Loading Admin Data...</div>;
 
     if (selectedUser) {
-        const userProjects = projects.filter(p => p.user_email === selectedUser.email || (selectedUser.email && p.user_email?.toLowerCase() === selectedUser.email.toLowerCase()));
+        const userProjects = projects.filter(p => p.user_email === selectedUser.email || (selectedUser.email && (p.user_email || '').toLowerCase() === (selectedUser.email || '').toLowerCase()));
         const userCreditsUsed = userProjects.reduce((acc, p) => acc + (p.cost || 0), 0);
         const paginatedUserProjects = userProjects.slice((activityPage - 1) * ITEMS_PER_PAGE, activityPage * ITEMS_PER_PAGE);
 
