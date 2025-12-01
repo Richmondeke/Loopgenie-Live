@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -40,6 +39,28 @@ const App: React.FC = () => {
   const [heyGenKey, setHeyGenKey] = useState(localStorage.getItem(STORAGE_KEY_HEYGEN) || DEFAULT_HEYGEN_API_KEY);
   const [isGenerating, setIsGenerating] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
+
+  // Theme State
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+        return localStorage.getItem('loopgenie_theme') === 'dark' || 
+               (!localStorage.getItem('loopgenie_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
+
+  // Apply Theme Effect
+  useEffect(() => {
+    if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('loopgenie_theme', 'dark');
+    } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('loopgenie_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
   const loadProfile = async (userId: string) => {
       const profile = await getUserProfile(userId);
@@ -336,7 +357,7 @@ const App: React.FC = () => {
 
   if (authLoading) {
       return (
-          <div className="h-screen flex items-center justify-center bg-gray-50">
+          <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
               <Loader2 className="animate-spin text-indigo-600" size={48} />
           </div>
       );
@@ -346,11 +367,18 @@ const App: React.FC = () => {
 
   if (!session) {
       if (authView) return <Auth key={authView} initialView={authView} onBack={() => setAuthView(null)} />;
-      return <LandingPage onLogin={() => setAuthView('LOGIN')} onSignup={() => setAuthView('SIGNUP')} />;
+      return (
+        <LandingPage 
+            onLogin={() => setAuthView('LOGIN')} 
+            onSignup={() => setAuthView('SIGNUP')} 
+            isDarkMode={isDarkMode}
+            toggleTheme={toggleTheme}
+        />
+      );
   }
 
   return (
-    <div className="flex h-screen bg-background relative">
+    <div className="flex h-screen bg-background dark:bg-gray-900 relative transition-colors duration-200">
       <Sidebar 
         currentView={currentView} 
         onChangeView={(view) => {
@@ -367,12 +395,14 @@ const App: React.FC = () => {
         credits={userCredits}
         onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
         isAdmin={userProfile?.isAdmin} 
+        isDarkMode={isDarkMode}
+        toggleTheme={toggleTheme}
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative">
-        <header className="md:hidden bg-white border-b border-gray-200 p-4 flex items-center justify-between">
-             <div className="font-bold text-gray-900">LoopGenie</div>
-             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-gray-600">
+        <header className="md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
+             <div className="font-bold text-gray-900 dark:text-white">LoopGenie</div>
+             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-gray-600 dark:text-gray-300">
                 <Menu />
              </button>
         </header>

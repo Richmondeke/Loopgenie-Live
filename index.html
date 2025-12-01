@@ -11,6 +11,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {
@@ -59,7 +60,7 @@
 }
 </script>
 </head>
-  <body class="bg-background text-gray-900 antialiased h-screen overflow-hidden font-sans">
+  <body class="bg-background dark:bg-gray-900 text-gray-900 dark:text-gray-100 antialiased h-screen overflow-hidden font-sans transition-colors duration-200">
     <div id="root" class="h-full"></div>
     <script type="module" src="./index.tsx"></script>
   </body>
