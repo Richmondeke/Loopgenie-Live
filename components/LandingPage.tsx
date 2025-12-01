@@ -14,8 +14,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onSignup, isD
         {/* Navigation */}
         <nav className="flex items-center justify-between px-6 py-4 max-w-7xl mx-auto sticky top-0 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md z-50 border-b border-gray-100/50 dark:border-gray-800/50">
             <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">
-                    L
+                <div className="w-10 h-10 flex items-center justify-center">
+                    <svg viewBox="0 0 100 50" className="w-full h-full drop-shadow-sm">
+                        <defs>
+                            <linearGradient id="lp_logo_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stopColor="#4f46e5" />
+                                <stop offset="100%" stopColor="#9333ea" />
+                            </linearGradient>
+                        </defs>
+                        <path 
+                            fill="none" 
+                            stroke="url(#lp_logo_grad)" 
+                            strokeWidth="10" 
+                            strokeLinecap="round"
+                            className="animate-draw"
+                            strokeDasharray="250"
+                            d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
+                        />
+                    </svg>
                 </div>
                 <span className="text-xl font-bold tracking-tight">LoopGenie</span>
             </div>
@@ -163,8 +179,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onSignup, isD
         <footer className="bg-white dark:bg-gray-900 py-12 border-t border-gray-100 dark:border-gray-800">
             <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-8 text-center md:text-left">
                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 bg-gray-900 dark:bg-white rounded-lg flex items-center justify-center text-white dark:text-gray-900 font-bold text-lg">
-                        L
+                    <div className="w-10 h-10 flex items-center justify-center">
+                        <svg viewBox="0 0 100 50" className="w-full h-full grayscale opacity-50 hover:grayscale-0 hover:opacity-100 transition-all">
+                            <defs>
+                                <linearGradient id="footer_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                                    <stop offset="0%" stopColor="#4f46e5" />
+                                    <stop offset="100%" stopColor="#9333ea" />
+                                </linearGradient>
+                            </defs>
+                            <path 
+                                fill="none" 
+                                stroke="url(#footer_grad)" 
+                                strokeWidth="10" 
+                                strokeLinecap="round"
+                                className="animate-draw"
+                                strokeDasharray="250"
+                                d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
+                            />
+                        </svg>
                     </div>
                     <div>
                         <span className="font-bold text-gray-900 dark:text-white block text-lg">LoopGenie</span>

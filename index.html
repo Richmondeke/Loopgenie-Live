@@ -25,6 +25,7 @@
             },
             animation: {
               blob: "blob 7s infinite",
+              draw: "draw 3s linear infinite",
             },
             keyframes: {
               blob: {
@@ -41,6 +42,11 @@
                   transform: "translate(0px, 0px) scale(1)",
                 },
               },
+              draw: {
+                "0%": { strokeDashoffset: "250" },
+                "50%": { strokeDashoffset: "0" },
+                "100%": { strokeDashoffset: "250" }
+              }
             },
           }
         }

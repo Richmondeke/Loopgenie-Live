@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { signIn, signUp, resetPassword } from '../services/authService';
 import { Loader2, Mail, Lock, User, ArrowRight, Eye, EyeOff, ArrowLeft } from 'lucide-react';
@@ -67,8 +66,24 @@ export const Auth: React.FC<AuthProps> = ({ initialView = 'LOGIN', onBack }) => 
 
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
         <div className="text-center mb-8">
-          <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl mx-auto mb-4 shadow-lg transform rotate-3">
-            L
+          <div className="w-16 h-16 mx-auto mb-4 flex items-center justify-center">
+             <svg viewBox="0 0 100 50" className="w-full h-full drop-shadow-md">
+                <defs>
+                    <linearGradient id="auth_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor="#4f46e5" />
+                        <stop offset="100%" stopColor="#9333ea" />
+                    </linearGradient>
+                </defs>
+                <path 
+                    fill="none" 
+                    stroke="url(#auth_grad)" 
+                    strokeWidth="10" 
+                    strokeLinecap="round"
+                    className="animate-draw"
+                    strokeDasharray="250"
+                    d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
+                />
+            </svg>
           </div>
           <h2 className="text-3xl font-bold text-gray-900">
             {isForgotPassword ? 'Reset Password' : isLogin ? 'Welcome Back' : 'Create Account'}

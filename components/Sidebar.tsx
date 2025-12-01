@@ -51,9 +51,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
       )}
 
       <div className={`fixed inset-y-0 left-0 transform ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static z-30 w-64 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col transition-transform duration-200 ease-in-out`}>
-        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center gap-2">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">
-            L
+        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center gap-3">
+          <div className="w-10 h-10 flex items-center justify-center">
+            <svg viewBox="0 0 100 50" className="w-full h-full drop-shadow-md">
+                <defs>
+                    <linearGradient id="sidebar_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                        <stop offset="0%" stopColor="#4f46e5" />
+                        <stop offset="100%" stopColor="#9333ea" />
+                    </linearGradient>
+                </defs>
+                <path 
+                    fill="none" 
+                    stroke="url(#sidebar_grad)" 
+                    strokeWidth="10" 
+                    strokeLinecap="round"
+                    className="animate-draw"
+                    strokeDasharray="250"
+                    d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
+                />
+            </svg>
           </div>
           <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">LoopGenie</h1>
         </div>
