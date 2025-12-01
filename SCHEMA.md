@@ -108,6 +108,7 @@ ALTER TABLE social_integrations ADD CONSTRAINT social_integrations_user_platform
 | `scheduled_at` | Int8 | - | Timestamp |
 | `status` | Text | `'scheduled'` | 'scheduled', 'posted', 'failed' |
 | `created_at` | Timestamptz | `now()` | |
+| `media_url` | Text | - | Optional URL to media |
 
 ### RLS Policies for Social Posts
 1. **Enable RLS**
