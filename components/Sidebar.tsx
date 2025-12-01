@@ -27,14 +27,16 @@ const NavItem: React.FC<{
   return (
     <button
       onClick={() => onClick(view)}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors font-medium ${
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium group relative overflow-hidden ${
         isActive
-          ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
-          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
+          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
       } ${extraClass || ''}`}
     >
-      {React.cloneElement(icon as React.ReactElement, { size: 20 })}
-      <span>{label}</span>
+      <div className={`relative z-10 flex items-center gap-3`}>
+        {React.cloneElement(icon as React.ReactElement, { size: 20, className: isActive ? 'text-white' : 'group-hover:scale-110 transition-transform duration-300' })}
+        <span>{label}</span>
+      </div>
     </button>
   );
 };
@@ -45,13 +47,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
        {/* Mobile Overlay */}
        {isMobileOpen && (
         <div 
-            className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-20 md:hidden"
             onClick={toggleMobileMenu}
         />
       )}
 
-      <div className={`fixed inset-y-0 left-0 transform ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static z-30 w-64 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col transition-transform duration-200 ease-in-out`}>
-        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center gap-3">
+      <div className={`fixed inset-y-0 left-0 transform ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static z-30 w-72 bg-white dark:bg-gray-950 border-r border-gray-100 dark:border-gray-800 flex flex-col transition-transform duration-300 ease-out shadow-2xl md:shadow-none`}>
+        <div className="p-6 flex items-center gap-3">
           <div className="w-10 h-10 flex items-center justify-center">
             <svg viewBox="0 0 100 50" className="w-full h-full drop-shadow-md">
                 <defs>
@@ -74,8 +76,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
           <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">LoopGenie</h1>
         </div>
 
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-4 mt-2">
+        <nav className="flex-1 px-4 space-y-1 overflow-y-auto custom-scrollbar py-4">
+          <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-4 mt-2">
             Create
           </div>
           <NavItem
@@ -85,15 +87,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
             label="Templates"
             onClick={onChangeView}
           />
-          <NavItem
-            view={AppView.ASSETS}
-            current={currentView}
-            icon={<Upload />}
-            label="Assets"
-            onClick={onChangeView}
-          />
+          {/* Assets Removed as requested */}
 
-          <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-4 mt-6">
+          <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-4 mt-6">
             Manage
           </div>
           <NavItem
@@ -106,29 +102,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
 
           {isAdmin && (
             <>
-              <div className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2 px-4 mt-6">
+              <div className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-3 px-4 mt-6">
                 Admin
               </div>
               <NavItem
                 view={AppView.ADMIN}
                 current={currentView}
-                icon={<ShieldCheck className="text-purple-600 dark:text-purple-400" />}
+                icon={<ShieldCheck className={currentView === AppView.ADMIN ? 'text-white' : 'text-purple-600 dark:text-purple-400'} />}
                 label="Dashboard"
                 onClick={onChangeView}
-                extraClass="bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/40 border border-purple-100 dark:border-purple-900/50"
+                extraClass={currentView !== AppView.ADMIN ? "bg-purple-50 dark:bg-purple-900/10 hover:bg-purple-100 dark:hover:bg-purple-900/20 border border-purple-100 dark:border-purple-900/30" : "bg-purple-600 border-transparent"}
               />
               <NavItem
                 view={AppView.ADMIN_USERS}
                 current={currentView}
-                icon={<Users className="text-purple-600 dark:text-purple-400" />}
+                icon={<Users className={currentView === AppView.ADMIN_USERS ? 'text-white' : 'text-purple-600 dark:text-purple-400'} />}
                 label="Users & Credits"
                 onClick={onChangeView}
-                extraClass="bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/40 border border-purple-100 dark:border-purple-900/50 mt-1"
+                extraClass={`mt-1 ${currentView !== AppView.ADMIN_USERS ? "bg-purple-50 dark:bg-purple-900/10 hover:bg-purple-100 dark:hover:bg-purple-900/20 border border-purple-100 dark:border-purple-900/30" : "bg-purple-600 border-transparent"}`}
               />
             </>
           )}
 
-          <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 px-4 mt-6">
+          <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-3 px-4 mt-6">
             System
           </div>
           <NavItem
@@ -147,14 +143,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
           />
         </nav>
 
-        <div className="p-4 border-t border-gray-100 dark:border-gray-800 space-y-3">
+        <div className="p-4 border-t border-gray-100 dark:border-gray-800 space-y-3 bg-white dark:bg-gray-950">
            
            {toggleTheme && (
                <button 
                   onClick={toggleTheme}
-                  className="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors font-medium text-sm"
+                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors font-medium text-sm border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
                >
-                  {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+                  {isDarkMode ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} className="text-indigo-600" />}
                   <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
                </button>
            )}
@@ -162,34 +158,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
            {onSignOut && (
                <button 
                   onClick={onSignOut}
-                  className="w-full flex items-center gap-3 px-4 py-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-700 dark:hover:text-red-400 transition-colors font-medium text-sm"
+                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors font-medium text-sm border border-transparent hover:border-red-100 dark:hover:border-red-900/30"
                >
                   <LogOut size={18} />
                   <span>Sign Out</span>
                </button>
            )}
 
-           <div className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-indigo-900/30 dark:to-blue-900/30 rounded-xl p-4 border border-indigo-100 dark:border-indigo-800 shadow-sm relative overflow-hidden group">
-             <div className="flex items-center gap-2 mb-2 relative z-10">
-                <div className="bg-indigo-100 dark:bg-indigo-800 p-1.5 rounded-md text-indigo-600 dark:text-indigo-300">
+           <div className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 rounded-2xl p-5 border border-indigo-100 dark:border-gray-700 shadow-sm relative overflow-hidden group">
+             <div className="flex items-center gap-2 mb-3 relative z-10">
+                <div className="bg-white dark:bg-gray-700 p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400 shadow-sm">
                     <Coins size={16} />
                 </div>
-                <div className="text-xs text-indigo-900 dark:text-indigo-200 font-bold uppercase tracking-wider">Credits Available</div>
+                <div className="text-xs text-indigo-900 dark:text-gray-300 font-bold uppercase tracking-wider">Credits Available</div>
              </div>
              
-             <div className="flex items-end gap-1 mb-3 relative z-10">
-                <span className="text-3xl font-black text-indigo-600 dark:text-indigo-400 leading-none">{credits}</span>
+             <div className="flex items-end gap-1 mb-4 relative z-10">
+                <span className="text-3xl font-black text-indigo-600 dark:text-white leading-none">{credits}</span>
              </div>
 
              <button 
                 onClick={onOpenUpgrade}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg shadow-sm flex items-center justify-center gap-1 transition-colors relative z-10"
+                className="w-full bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-lg shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 relative z-10"
              >
                 <PlusCircle size={14} /> Get Credits
              </button>
              
              {/* Decorative shimmer */}
-             <div className="absolute top-0 right-0 w-16 h-16 bg-white opacity-20 rounded-full blur-xl transform translate-x-4 -translate-y-4 pointer-events-none" />
+             <div className="absolute -top-10 -right-10 w-32 h-32 bg-indigo-500/10 dark:bg-indigo-500/20 rounded-full blur-2xl pointer-events-none" />
            </div>
         </div>
       </div>
