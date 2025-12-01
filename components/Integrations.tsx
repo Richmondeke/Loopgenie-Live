@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { IntegrationStatus, ScheduledPost } from '../types';
-import { Twitter, Send, Calendar, Clock, Image as ImageIcon, X, Trash2, CheckCircle, AlertCircle, Loader2, Linkedin, Instagram, ExternalLink, RefreshCw, User, Link as LinkIcon, Info, Plus, LogOut } from 'lucide-react';
+import { Twitter, Send, Calendar, Clock, Image as ImageIcon, X, Trash2, CheckCircle, AlertCircle, Loader2, Linkedin, Instagram, LogOut, Copy, ExternalLink, RefreshCw } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
 export const Integrations: React.FC = () => {
@@ -18,10 +18,11 @@ export const Integrations: React.FC = () => {
     const [selectedPlatform, setSelectedPlatform] = useState<'twitter' | 'linkedin' | 'instagram'>('twitter');
     const [isPosting, setIsPosting] = useState(false);
 
-    // --- Verification Modal State ---
-    const [verifyingPlatform, setVerifyingPlatform] = useState<string | null>(null);
-    const [verifyUsername, setVerifyUsername] = useState('');
-    const [authWindowRef, setAuthWindowRef] = useState<Window | null>(null);
+    // --- Connection Modal State ---
+    const [connectModalOpen, setConnectModalOpen] = useState(false);
+    const [platformToConnect, setPlatformToConnect] = useState<string | null>(null);
+    const [usernameInput, setUsernameInput] = useState('');
+    const [isSavingConnection, setIsSavingConnection] = useState(false);
 
     // --- Load Data ---
     useEffect(() => {
@@ -32,8 +33,8 @@ export const Integrations: React.FC = () => {
         try {
             const { data: { user } } = await supabase.auth.getUser();
             
-            // 1. Fetch Integrations
             if (user) {
+                // 1. Fetch Integrations
                 const { data: dbInteg, error: integError } = await supabase
                     .from('social_integrations')
                     .select('*')
@@ -42,7 +43,9 @@ export const Integrations: React.FC = () => {
                 if (!integError && dbInteg) {
                     setIntegrations(prev => prev.map(p => {
                         const found = dbInteg.find((d: any) => d.platform === p.id);
-                        return found ? { ...p, connected: true, username: found.username, avatarUrl: found.avatar_url } : { ...p, connected: false, username: undefined };
+                        return found 
+                            ? { ...p, connected: true, username: found.username, avatarUrl: found.avatar_url } 
+                            : { ...p, connected: false, username: undefined, avatarUrl: undefined };
                     }));
                 }
 
@@ -71,64 +74,44 @@ export const Integrations: React.FC = () => {
         }
     };
 
-    const handleConnect = (platform: string) => {
-        // 1. Open official login URL in popup to simulate auth flow
-        const width = 600;
-        const height = 700;
-        const left = window.screen.width / 2 - width / 2;
-        const top = window.screen.height / 2 - height / 2;
-        
-        let url = '';
-        if (platform === 'twitter') url = 'https://twitter.com/i/flow/login';
-        if (platform === 'linkedin') url = 'https://www.linkedin.com/login';
-        if (platform === 'instagram') url = 'https://www.instagram.com/accounts/login/';
-
-        const win = window.open(url, `Connect ${platform}`, `width=${width},height=${height},top=${top},left=${left}`);
-        setAuthWindowRef(win);
-
-        // 2. Immediately open local verification modal to capture the result
-        setVerifyUsername('');
-        setVerifyingPlatform(platform);
+    const openConnectModal = (platform: string) => {
+        setPlatformToConnect(platform);
+        setUsernameInput('');
+        setConnectModalOpen(true);
     };
 
-    const handleConfirmConnection = async () => {
-        if (!verifyUsername || !verifyingPlatform) return;
+    const handleSaveConnection = async () => {
+        if (!usernameInput || !platformToConnect) return;
         
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            alert("Please log in to save connections.");
-            return;
-        }
-
-        // Close external window if open
-        if (authWindowRef) authWindowRef.close();
-
-        // Optimistic UI Update
-        setIntegrations(prev => prev.map(p => p.id === verifyingPlatform ? { ...p, connected: true, username: verifyUsername } : p));
-        
+        setIsSavingConnection(true);
         try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error("Please log in to save connections.");
+
+            const handle = usernameInput.startsWith('@') ? usernameInput : `@${usernameInput}`;
+            
             // Persist to DB
             const { error } = await supabase
                 .from('social_integrations')
                 .upsert({
                     user_id: user.id,
-                    platform: verifyingPlatform,
-                    username: verifyUsername.startsWith('@') ? verifyUsername : `@${verifyUsername}`,
+                    platform: platformToConnect,
+                    username: handle,
                     connected: true,
-                    avatar_url: `https://ui-avatars.com/api/?name=${verifyUsername}&background=random`
+                    avatar_url: `https://ui-avatars.com/api/?name=${handle}&background=random&color=fff`
                 }, { onConflict: 'user_id, platform' });
 
             if (error) throw error;
             
-            // Refresh to ensure sync
-            fetchData();
-            setVerifyingPlatform(null);
+            // Refresh local state immediately
+            await fetchData();
+            setConnectModalOpen(false);
 
         } catch (e: any) {
             console.error(e);
-            alert("Failed to save connection: " + e.message);
-            // Revert UI on failure
-            fetchData();
+            alert("Failed to connect: " + (e.message || "Unknown error"));
+        } finally {
+            setIsSavingConnection(false);
         }
     };
 
@@ -136,33 +119,38 @@ export const Integrations: React.FC = () => {
          const { data: { user } } = await supabase.auth.getUser();
          if (!user) return;
 
-         if (!confirm(`Are you sure you want to disconnect ${platform}?`)) return;
+         if (!confirm(`Disconnect ${platform}? This will remove it from your dashboard.`)) return;
 
-         // Optimistic
-         setIntegrations(prev => prev.map(p => p.id === platform ? { ...p, connected: false, username: undefined } : p));
+         // Optimistic Update
+         setIntegrations(prev => prev.map(p => p.id === platform ? { ...p, connected: false } : p));
 
          await supabase
             .from('social_integrations')
             .delete()
             .match({ user_id: user.id, platform: platform });
+         
+         fetchData();
     };
 
     const handlePost = async () => {
         if (!content.trim()) return;
         
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!user) {
+            alert("Please sign in to post.");
+            return;
+        }
 
         setIsPosting(true);
         
         try {
-            // Save post to DB
+            // 1. Save to History (DB)
             const newPost = {
                 id: `post_${Date.now()}`,
                 user_id: user.id,
                 content,
                 platform: selectedPlatform,
-                status: 'scheduled', // In a real app, this would be 'queued'
+                status: 'posted', 
                 scheduled_at: Date.now(),
                 created_at: new Date().toISOString()
             };
@@ -170,13 +158,31 @@ export const Integrations: React.FC = () => {
             const { error } = await supabase.from('social_posts').insert(newPost);
             if (error) throw error;
 
+            // 2. Perform "Real" Action (Web Intent)
+            let intentUrl = '';
+            const encodedText = encodeURIComponent(content);
+            
+            if (selectedPlatform === 'twitter') {
+                intentUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
+                window.open(intentUrl, '_blank', 'width=550,height=420');
+            } else if (selectedPlatform === 'linkedin') {
+                // LinkedIn text sharing is limited via URL, usually shares a URL. 
+                // We'll fallback to copying to clipboard for LinkedIn/Instagram
+                await navigator.clipboard.writeText(content);
+                alert("Text copied to clipboard! Opening LinkedIn...");
+                window.open('https://www.linkedin.com/feed/', '_blank');
+            } else {
+                 await navigator.clipboard.writeText(content);
+                 alert("Text copied to clipboard! Opening Instagram...");
+                 window.open('https://www.instagram.com/', '_blank');
+            }
+
             // Update UI
             setContent('');
             fetchData();
-            alert("Post scheduled successfully!");
 
         } catch (e: any) {
-            alert("Failed to schedule post: " + e.message);
+            alert("Failed to post: " + e.message);
         } finally {
             setIsPosting(false);
         }
@@ -185,8 +191,16 @@ export const Integrations: React.FC = () => {
     const connectedCount = integrations.filter(i => i.connected).length;
     const activePlatform = integrations.find(i => i.id === selectedPlatform);
 
+    // Colors helper
+    const getPlatformColor = (id: string) => {
+        if (id === 'twitter') return 'bg-black text-white border-gray-700';
+        if (id === 'linkedin') return 'bg-[#0077b5] text-white border-transparent';
+        if (id === 'instagram') return 'bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-500 text-white border-transparent';
+        return 'bg-gray-700';
+    };
+
     return (
-        <div className="h-full overflow-y-auto p-4 md:p-8 bg-black/95 text-gray-100">
+        <div className="h-full overflow-y-auto p-4 md:p-8 bg-black text-gray-100 font-sans">
             <div className="max-w-6xl mx-auto">
                 <div className="mb-8">
                     <h2 className="text-3xl font-bold text-white mb-2">Integrations</h2>
@@ -194,67 +208,61 @@ export const Integrations: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    {/* Left Column: Connected Accounts */}
-                    <div className="lg:col-span-4 space-y-6">
-                        <div className="flex items-center gap-3 mb-4">
-                            <div className="w-1 h-6 bg-indigo-500 rounded-full"></div>
+                    
+                    {/* --- LEFT COLUMN: CONNECTED ACCOUNTS --- */}
+                    <div className="lg:col-span-5 space-y-6">
+                        <div className="flex items-center gap-3 mb-2">
+                            <div className="w-1 h-5 bg-indigo-500 rounded-full"></div>
                             <h3 className="text-lg font-bold text-white">Connected Accounts</h3>
                         </div>
 
                         {integrations.map((integ) => (
                             <div 
                                 key={integ.id} 
-                                className={`p-5 rounded-2xl border transition-all duration-200 ${
+                                className={`p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${
                                     integ.connected 
-                                    ? 'bg-gray-900 border-indigo-500/30 shadow-lg shadow-indigo-900/10' 
-                                    : 'bg-gray-900/50 border-gray-800 hover:border-gray-700'
+                                    ? 'bg-gray-900/80 border-indigo-500/30 shadow-[0_4px_20px_-10px_rgba(99,102,241,0.3)]' 
+                                    : 'bg-gray-900/40 border-gray-800 hover:border-gray-700'
                                 }`}
                             >
-                                <div className="flex items-center justify-between mb-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className={`p-2.5 rounded-xl ${
-                                            integ.id === 'twitter' ? 'bg-blue-950 text-blue-400' :
-                                            integ.id === 'linkedin' ? 'bg-blue-900 text-blue-300' :
-                                            'bg-pink-950 text-pink-400'
-                                        }`}>
-                                            {integ.id === 'twitter' && <Twitter size={20} />}
-                                            {integ.id === 'linkedin' && <Linkedin size={20} />}
-                                            {integ.id === 'instagram' && <Instagram size={20} />}
+                                <div className="flex items-center justify-between mb-4 relative z-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-lg ${getPlatformColor(integ.id)}`}>
+                                            {integ.id === 'twitter' && <Twitter size={24} fill="currentColor" />}
+                                            {integ.id === 'linkedin' && <Linkedin size={24} fill="currentColor" />}
+                                            {integ.id === 'instagram' && <Instagram size={24} />}
                                         </div>
                                         <div>
-                                            <div className="font-bold text-white text-sm">{integ.name}</div>
-                                            <div className="text-xs text-gray-500">
-                                                {integ.connected ? 'Connected' : 'Not connected'}
+                                            <div className="font-bold text-white text-base">{integ.name}</div>
+                                            <div className={`text-xs font-medium ${integ.connected ? 'text-green-400' : 'text-gray-500'}`}>
+                                                {integ.connected ? 'Active Connection' : 'Not connected'}
                                             </div>
                                         </div>
                                     </div>
-                                    {integ.connected && (
-                                        <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]"></div>
-                                    )}
                                 </div>
 
                                 {integ.connected ? (
-                                    <div className="bg-black/30 rounded-xl p-3 flex items-center justify-between border border-gray-800">
+                                    <div className="bg-black/40 rounded-xl p-3 flex items-center justify-between border border-gray-800 relative z-10">
                                         <div className="flex items-center gap-3">
                                             <img 
                                                 src={integ.avatarUrl || `https://ui-avatars.com/api/?name=${integ.username}&background=random`} 
                                                 alt="Avatar" 
                                                 className="w-8 h-8 rounded-full border border-gray-700"
                                             />
-                                            <span className="text-sm font-mono text-gray-300">{integ.username}</span>
+                                            <span className="text-sm font-mono text-gray-300 font-bold">{integ.username}</span>
                                         </div>
                                         <button 
                                             onClick={() => handleDisconnect(integ.id)}
-                                            className="text-gray-500 hover:text-red-400 transition-colors p-1.5 hover:bg-red-900/20 rounded-lg"
+                                            className="text-gray-500 hover:text-red-400 transition-colors p-2 hover:bg-red-900/10 rounded-lg"
                                             title="Disconnect"
                                         >
-                                            <LogOut size={14} />
+                                            <LogOut size={16} />
                                         </button>
                                     </div>
                                 ) : (
                                     <button 
-                                        onClick={() => handleConnect(integ.id)}
-                                        className="w-full py-2.5 bg-white text-black text-sm font-bold rounded-xl hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
+                                        onClick={() => openConnectModal(integ.id)}
+                                        className="w-full py-3 bg-white hover:bg-gray-100 text-black text-sm font-bold rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 relative z-10"
                                     >
                                         Connect {integ.name}
                                     </button>
@@ -263,119 +271,116 @@ export const Integrations: React.FC = () => {
                         ))}
                     </div>
 
-                    {/* Right Column: Post Composer & History */}
-                    <div className="lg:col-span-8 space-y-8">
+                    {/* --- RIGHT COLUMN: POST COMPOSER & HISTORY --- */}
+                    <div className="lg:col-span-7 space-y-8">
                         
-                        {/* Composer */}
-                        <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 relative overflow-hidden group">
-                            <div className="flex items-center gap-2 mb-4 text-indigo-400">
-                                <Send size={18} />
-                                <h3 className="font-bold text-white">New Post</h3>
-                            </div>
+                        {/* COMPOSER CARD */}
+                        <div className="bg-gray-900 border border-gray-800 rounded-3xl p-1 relative overflow-hidden shadow-2xl">
+                             <div className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 absolute inset-0 pointer-events-none" />
+                             
+                             <div className="p-5 relative">
+                                <div className="flex items-center gap-2 mb-4 text-indigo-400">
+                                    <Send size={18} />
+                                    <h3 className="font-bold text-white">New Post</h3>
+                                </div>
 
-                            <div className="relative">
-                                {/* Disabled Overlay */}
-                                {connectedCount === 0 && (
-                                    <div className="absolute inset-0 z-10 bg-gray-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6 border border-gray-700 border-dashed rounded-xl">
-                                        <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 mb-3">
-                                            <AlertCircle size={24} />
-                                        </div>
-                                        <h4 className="text-white font-bold mb-1">No accounts connected</h4>
-                                        <p className="text-gray-400 text-sm mb-4">Connect X (Twitter) or LinkedIn to start scheduling posts.</p>
-                                        <button 
-                                            onClick={() => handleConnect('twitter')}
-                                            className="text-indigo-400 text-sm font-bold hover:underline"
-                                        >
-                                            Connect Now
-                                        </button>
-                                    </div>
-                                )}
-
-                                <textarea
-                                    value={content}
-                                    onChange={(e) => setContent(e.target.value)}
-                                    placeholder="What would you like to share?"
-                                    className="w-full bg-black/40 border border-gray-700 rounded-xl p-4 text-white placeholder-gray-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none h-32 text-base transition-all"
-                                    disabled={connectedCount === 0}
-                                />
-                                
-                                <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                                    <div className="flex gap-2 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
-                                        {integrations.filter(i => i.connected).map(integ => (
-                                            <button
-                                                key={integ.id}
-                                                onClick={() => setSelectedPlatform(integ.id as any)}
-                                                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${
-                                                    selectedPlatform === integ.id 
-                                                    ? 'bg-indigo-900/30 text-indigo-300 border-indigo-500/50' 
-                                                    : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-600'
-                                                }`}
+                                <div className="relative rounded-xl overflow-hidden bg-black/50 border border-gray-700/50 focus-within:border-indigo-500/50 transition-colors">
+                                    {/* DISABLED STATE OVERLAY */}
+                                    {connectedCount === 0 && (
+                                        <div className="absolute inset-0 z-20 bg-gray-900/90 backdrop-blur-sm flex flex-col items-center justify-center text-center p-6">
+                                            <div className="w-12 h-12 rounded-full bg-gray-800 flex items-center justify-center text-gray-400 mb-3 ring-1 ring-gray-700">
+                                                <AlertCircle size={24} />
+                                            </div>
+                                            <h4 className="text-white font-bold mb-1">No accounts connected</h4>
+                                            <p className="text-gray-400 text-sm mb-4 max-w-xs">Connect X (Twitter) or LinkedIn on the left to start scheduling posts.</p>
+                                            <button 
+                                                onClick={() => openConnectModal('twitter')}
+                                                className="text-indigo-400 text-sm font-bold hover:text-indigo-300 transition-colors"
                                             >
-                                                {integ.id === 'twitter' && <Twitter size={12} />}
-                                                {integ.id === 'linkedin' && <Linkedin size={12} />}
-                                                {integ.name}
+                                                Connect Now &rarr;
                                             </button>
-                                        ))}
-                                    </div>
+                                        </div>
+                                    )}
 
-                                    <div className="flex items-center gap-3 w-full sm:w-auto">
-                                        <button 
-                                            className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded-lg transition-colors"
-                                            title="Add Image (Demo)"
-                                            disabled={connectedCount === 0}
-                                        >
-                                            <ImageIcon size={18} />
-                                        </button>
-                                        <button 
-                                            className="p-2 text-gray-400 hover:text-white bg-gray-800 rounded-lg transition-colors"
-                                            title="Schedule (Demo)"
-                                            disabled={connectedCount === 0}
-                                        >
-                                            <Calendar size={18} />
-                                        </button>
-                                        <button 
-                                            onClick={handlePost}
-                                            disabled={connectedCount === 0 || !content.trim() || isPosting}
-                                            className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                                        >
-                                            {isPosting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                                            Post Now
-                                        </button>
+                                    <textarea
+                                        value={content}
+                                        onChange={(e) => setContent(e.target.value)}
+                                        placeholder="What would you like to share?"
+                                        className="w-full bg-transparent border-none p-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-32 text-base leading-relaxed"
+                                        disabled={connectedCount === 0}
+                                    />
+                                    
+                                    <div className="px-4 pb-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-gray-800/50 pt-3">
+                                        <div className="flex gap-2 w-full sm:w-auto overflow-x-auto no-scrollbar">
+                                            {integrations.filter(i => i.connected).map(integ => (
+                                                <button
+                                                    key={integ.id}
+                                                    onClick={() => setSelectedPlatform(integ.id as any)}
+                                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${
+                                                        selectedPlatform === integ.id 
+                                                        ? 'bg-indigo-600 text-white border-indigo-500' 
+                                                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'
+                                                    }`}
+                                                >
+                                                    {integ.id === 'twitter' && <Twitter size={12} fill="currentColor" />}
+                                                    {integ.id === 'linkedin' && <Linkedin size={12} fill="currentColor" />}
+                                                    {integ.id === 'instagram' && <Instagram size={12} />}
+                                                    {integ.name}
+                                                </button>
+                                            ))}
+                                        </div>
+
+                                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                                            <button 
+                                                onClick={handlePost}
+                                                disabled={connectedCount === 0 || !content.trim() || isPosting}
+                                                className="flex-1 sm:flex-none bg-white hover:bg-gray-200 text-black px-6 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg active:scale-95"
+                                            >
+                                                {isPosting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                                                Post Now
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                             </div>
                         </div>
 
-                        {/* Queue / History */}
-                        <div className="space-y-4">
-                            <div className="flex items-center gap-2 text-green-400">
+                        {/* QUEUE & HISTORY */}
+                        <div>
+                            <div className="flex items-center gap-2 text-green-400 mb-4 px-2">
                                 <Calendar size={18} />
                                 <h3 className="font-bold text-white">Queue & History</h3>
                             </div>
                             
-                            <div className="border border-dashed border-gray-800 rounded-2xl p-1 bg-gray-900/30 min-h-[100px]">
+                            <div className="border border-dashed border-gray-800 rounded-3xl p-4 bg-gray-900/20 min-h-[150px]">
                                 {posts.length === 0 ? (
-                                    <div className="h-full flex flex-col items-center justify-center p-8 text-gray-500">
-                                        <p className="text-sm">No scheduled posts yet.</p>
+                                    <div className="h-full flex flex-col items-center justify-center py-10 text-gray-600">
+                                        <div className="w-12 h-12 bg-gray-800/50 rounded-full flex items-center justify-center mb-3">
+                                            <Clock size={20} className="opacity-50" />
+                                        </div>
+                                        <p className="text-sm font-medium">No scheduled posts yet.</p>
                                     </div>
                                 ) : (
-                                    <div className="space-y-1">
+                                    <div className="space-y-3">
                                         {posts.map(post => (
-                                            <div key={post.id} className="bg-gray-900 border border-gray-800 p-4 rounded-xl flex items-start gap-4 group hover:border-gray-700 transition-colors">
-                                                <div className="p-2 bg-gray-800 rounded-lg text-gray-400">
-                                                    {post.platform === 'twitter' ? <Twitter size={16} /> : <Linkedin size={16} />}
+                                            <div key={post.id} className="bg-gray-900 border border-gray-800 p-4 rounded-xl flex items-start gap-4 group hover:border-gray-700 transition-colors shadow-sm">
+                                                <div className={`p-2 rounded-lg text-white flex-shrink-0 ${post.platform === 'twitter' ? 'bg-black' : 'bg-[#0077b5]'}`}>
+                                                    {post.platform === 'twitter' ? <Twitter size={16} fill="currentColor" /> : <Linkedin size={16} fill="currentColor" />}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="text-gray-300 text-sm mb-2 line-clamp-2">{post.content}</p>
-                                                    <div className="flex items-center gap-3 text-xs text-gray-500">
-                                                        <span className={`px-2 py-0.5 rounded uppercase font-bold ${
-                                                            post.status === 'posted' ? 'bg-green-900/30 text-green-400' : 'bg-yellow-900/30 text-yellow-400'
+                                                    <p className="text-gray-300 text-sm mb-2 line-clamp-2 leading-relaxed">{post.content}</p>
+                                                    <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
+                                                        <span className={`px-2 py-0.5 rounded uppercase font-bold text-[10px] ${
+                                                            post.status === 'posted' ? 'bg-green-900/30 text-green-400 border border-green-900/50' : 'bg-yellow-900/30 text-yellow-400 border border-yellow-900/50'
                                                         }`}>
                                                             {post.status}
                                                         </span>
                                                         <span>{new Date(post.scheduledAt).toLocaleString()}</span>
                                                     </div>
                                                 </div>
+                                                {post.status === 'posted' && (
+                                                    <a href="#" className="text-gray-600 hover:text-indigo-400 transition-colors self-center p-2"><ExternalLink size={16} /></a>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
@@ -387,38 +392,42 @@ export const Integrations: React.FC = () => {
                 </div>
             </div>
 
-            {/* Verification Modal */}
-            {verifyingPlatform && (
+            {/* --- CONNECTION MODAL --- */}
+            {connectModalOpen && platformToConnect && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                    <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+                    <div className="bg-gray-900 border border-gray-700 rounded-3xl w-full max-w-md p-8 shadow-2xl relative overflow-hidden">
+                        
+                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
+                        
                         <button 
-                            onClick={() => { setVerifyingPlatform(null); if(authWindowRef) authWindowRef.close(); }} 
-                            className="absolute top-4 right-4 text-gray-500 hover:text-white"
+                            onClick={() => setConnectModalOpen(false)} 
+                            className="absolute top-4 right-4 text-gray-500 hover:text-white bg-gray-800 hover:bg-gray-700 p-1.5 rounded-full transition-colors"
                         >
                             <X size={20} />
                         </button>
 
-                        <div className="text-center mb-6">
-                            <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4 border border-gray-700">
-                                {verifyingPlatform === 'twitter' ? <Twitter size={32} className="text-blue-400" /> : <Linkedin size={32} className="text-blue-600" />}
+                        <div className="text-center mb-8">
+                            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl ${getPlatformColor(platformToConnect)}`}>
+                                {platformToConnect === 'twitter' && <Twitter size={40} fill="currentColor" />}
+                                {platformToConnect === 'linkedin' && <Linkedin size={40} fill="currentColor" />}
+                                {platformToConnect === 'instagram' && <Instagram size={40} />}
                             </div>
-                            <h3 className="text-xl font-bold text-white mb-2">Verify Connection</h3>
-                            <p className="text-gray-400 text-sm">
-                                We opened {verifyingPlatform === 'twitter' ? 'X (Twitter)' : verifyingPlatform} in a new window. 
-                                Please log in there, then enter your handle below to confirm the link.
+                            <h3 className="text-2xl font-bold text-white mb-2">Connect {platformToConnect === 'twitter' ? 'X (Twitter)' : 'Account'}</h3>
+                            <p className="text-gray-400 text-sm leading-relaxed px-4">
+                                Enter your handle below to link this account. We'll use this to tag your posts and manage your history.
                             </p>
                         </div>
 
-                        <div className="space-y-4">
+                        <div className="space-y-6">
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Your {verifyingPlatform} Handle</label>
-                                <div className="relative">
-                                    <span className="absolute left-4 top-3.5 text-gray-500">@</span>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-2 ml-1">Username / Handle</label>
+                                <div className="relative group">
+                                    <span className="absolute left-4 top-3.5 text-gray-500 font-bold group-focus-within:text-indigo-500 transition-colors">@</span>
                                     <input 
                                         type="text" 
-                                        value={verifyUsername}
-                                        onChange={(e) => setVerifyUsername(e.target.value)}
-                                        className="w-full bg-black border border-gray-700 rounded-xl py-3 pl-8 pr-4 text-white placeholder-gray-600 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                        value={usernameInput}
+                                        onChange={(e) => setUsernameInput(e.target.value)}
+                                        className="w-full bg-black border border-gray-700 rounded-xl py-3 pl-8 pr-4 text-white font-bold placeholder-gray-700 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                                         placeholder="username"
                                         autoFocus
                                     />
@@ -426,12 +435,17 @@ export const Integrations: React.FC = () => {
                             </div>
                             
                             <button 
-                                onClick={handleConfirmConnection}
-                                disabled={!verifyUsername.trim()}
-                                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-indigo-500/20"
+                                onClick={handleSaveConnection}
+                                disabled={!usernameInput.trim() || isSavingConnection}
+                                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-95 flex items-center justify-center gap-2"
                             >
-                                Verify & Connect Account
+                                {isSavingConnection ? <Loader2 className="animate-spin" /> : <CheckCircle size={18} />}
+                                Save Connection
                             </button>
+                            
+                            <p className="text-center text-xs text-gray-600">
+                                By connecting, you agree to our Terms of Service.
+                            </p>
                         </div>
                     </div>
                 </div>

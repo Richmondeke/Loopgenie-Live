@@ -1,8 +1,6 @@
 
 # Database Schema Setup
 
-If you prefer to set up your Supabase database manually using the Table Editor, follow these specifications.
-
 ## 1. Profiles Table
 **Name:** `profiles`  
 **Description:** Stores user profile info and credits.
@@ -68,53 +66,51 @@ If you prefer to set up your Supabase database manually using the Table Editor, 
 
 ## 3. Social Integrations Table (NEW)
 **Name:** `social_integrations`
-**Description:** Stores OAuth tokens or connection status for social platforms.
+**Description:** Stores connected social accounts.
 
-| Column | Type | Default | Notes |
-|--------|------|---------|-------|
-| `id` | UUID | `gen_random_uuid()` | **Primary Key** |
-| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` |
-| `platform` | Text | - | 'twitter', 'linkedin', 'instagram' |
-| `access_token` | Text | - | Encrypted token (simulated for now) |
-| `username` | Text | - | Display name |
-| `avatar_url` | Text | - | Profile picture URL |
-| `connected` | Boolean | `true` | |
-| `created_at` | Timestamptz | `now()` | |
-
-**Constraint:**
-You MUST add a unique constraint on `(user_id, platform)` so you can connect/disconnect easily.
 ```sql
-ALTER TABLE social_integrations ADD CONSTRAINT social_integrations_user_platform_key UNIQUE (user_id, platform);
-```
+CREATE TABLE public.social_integrations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) NOT NULL,
+  platform TEXT NOT NULL,
+  username TEXT,
+  avatar_url TEXT,
+  connected BOOLEAN DEFAULT true,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(user_id, platform) -- Prevents duplicates
+);
 
-### RLS Policies for Social Integrations
-1. **Enable RLS**
-2. **Policy "Users can manage own integrations":**
-   - Operation: ALL
-   - Using: `auth.uid() = user_id`
+ALTER TABLE public.social_integrations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own integrations" 
+ON public.social_integrations FOR ALL 
+USING (auth.uid() = user_id);
+```
 
 ---
 
 ## 4. Social Posts Table (NEW)
 **Name:** `social_posts`
-**Description:** Stores scheduled and posted content.
+**Description:** Stores history of posts.
 
-| Column | Type | Default | Notes |
-|--------|------|---------|-------|
-| `id` | Text | - | **Primary Key** (string format) |
-| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` |
-| `content` | Text | - | |
-| `platform` | Text | - | |
-| `scheduled_at` | Int8 | - | Timestamp |
-| `status` | Text | `'scheduled'` | 'scheduled', 'posted', 'failed' |
-| `created_at` | Timestamptz | `now()` | |
-| `media_url` | Text | - | Optional URL to media |
+```sql
+CREATE TABLE public.social_posts (
+  id TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) NOT NULL,
+  content TEXT,
+  platform TEXT,
+  scheduled_at BIGINT,
+  status TEXT DEFAULT 'posted',
+  media_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
 
-### RLS Policies for Social Posts
-1. **Enable RLS**
-2. **Policy "Users can manage own posts":**
-   - Operation: ALL
-   - Using: `auth.uid() = user_id`
+ALTER TABLE public.social_posts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage their own posts" 
+ON public.social_posts FOR ALL 
+USING (auth.uid() = user_id);
+```
 
 ---
 
