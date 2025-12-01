@@ -136,9 +136,14 @@ export const Integrations: React.FC = () => {
             // We use the project ref from the Supabase client config
             const supabaseUrl = (supabase as any).supabaseUrl || 'https://ysetjcltrfktdamldrnl.supabase.co';
             
-            // Target: https://<project>.supabase.co/functions/v1/auth-<platform>
-            // This matches the "Option A" architecture where the frontend redirects to the Edge Function
-            const authUrl = `${supabaseUrl}/functions/v1/auth-${platform}?redirect_url=${encodeURIComponent(returnUrl)}`;
+            // Determine function name based on platform
+            let functionName = `auth-${platform}`;
+            if (platform === 'twitter') {
+                functionName = 'x_oauth_login';
+            }
+            
+            // Target: https://<project>.supabase.co/functions/v1/<functionName>
+            const authUrl = `${supabaseUrl}/functions/v1/${functionName}?redirect_url=${encodeURIComponent(returnUrl)}`;
             
             console.log(`Redirecting to Edge Function: ${authUrl}`);
             
