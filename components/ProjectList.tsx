@@ -60,15 +60,15 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
 
   return (
     <>
-      <div className="h-full flex flex-col">
+      <div className="h-full flex flex-col p-4 md:p-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
           <div>
-              <h2 className="text-2xl font-bold text-gray-900">My Projects</h2>
-              <p className="text-gray-600 font-medium">History of your generated videos and images.</p>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">My Projects</h2>
+              <p className="text-gray-600 dark:text-gray-400 font-medium">History of your generated videos and images.</p>
           </div>
           <button 
               onClick={handleRefresh}
-              className={`text-gray-600 hover:text-indigo-600 p-2 rounded-full hover:bg-gray-100 transition-colors self-end sm:self-auto ${isRefreshing ? 'animate-spin text-indigo-600 bg-indigo-50' : ''}`}
+              className={`text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-white p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors self-end sm:self-auto ${isRefreshing ? 'animate-spin text-indigo-600 bg-indigo-50 dark:bg-indigo-900/30' : ''}`}
               title="Refresh Projects"
           >
               <RefreshCw size={20} />
@@ -84,8 +84,8 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                         onClick={() => setActiveCategory(cat.id as any)}
                         className={`px-5 py-2.5 rounded-full text-sm font-bold whitespace-nowrap transition-all border snap-start ${
                             activeCategory === cat.id 
-                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 border-indigo-600' 
-                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 border-indigo-600 dark:border-indigo-500' 
+                            : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-gray-300'
                         }`}
                     >
                         {cat.label}
@@ -95,96 +95,99 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
         </div>
 
         {filteredProjects.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 rounded-xl m-4 bg-gray-50/50">
-              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-4 shadow-sm border border-gray-100">
-                  <Clock size={32} className="text-gray-300" />
+          <div className="flex-1 flex flex-col items-center justify-center text-gray-400 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl m-4 bg-gray-50/50 dark:bg-gray-900/50">
+              <div className="w-16 h-16 bg-white dark:bg-gray-800 rounded-full flex items-center justify-center mb-4 shadow-sm border border-gray-100 dark:border-gray-700">
+                  <Clock size={32} className="text-gray-300 dark:text-gray-500" />
               </div>
-              <p className="font-bold text-gray-600 text-lg">No projects found</p>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="font-bold text-gray-600 dark:text-gray-300 text-lg">No projects found</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                   {activeCategory === 'ALL' 
                     ? "Create your first video from the Templates tab." 
                     : `No projects in the ${activeCategory.toLowerCase()} category.`}
               </p>
-              <button onClick={handleRefresh} className="mt-4 text-indigo-600 font-bold text-sm hover:underline">
+              <button onClick={handleRefresh} className="mt-4 text-indigo-600 dark:text-indigo-400 font-bold text-sm hover:underline">
                   Refresh List
               </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 overflow-y-auto pb-10 pr-2">
-              {filteredProjects.map(project => (
-                  <div key={project.id} className="bg-white border border-gray-200 rounded-2xl p-4 flex items-center gap-5 hover:shadow-lg transition-all duration-300 group">
-                      <div className="w-40 aspect-video bg-gray-100 rounded-xl overflow-hidden flex-shrink-0 relative shadow-inner border border-gray-100">
-                          <img 
-                              src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} 
-                              alt="Thumbnail" 
-                              className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" 
-                          />
-                          {project.status === ProjectStatus.COMPLETED && project.videoUrl && (
-                              <button 
-                                  onClick={(e) => handleOpenItem(e, project)}
-                                  className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors cursor-pointer"
-                              >
-                                  <div className="bg-white/90 rounded-full p-3 shadow-lg transform scale-90 group-hover:scale-100 transition-transform hover:bg-white">
-                                     {project.type === 'FASHION_SHOOT' ? (
-                                         <ImageIcon className="text-rose-600" size={20} />
-                                     ) : (
-                                         <Play className="text-indigo-600 fill-current ml-0.5" size={20}/>
-                                     )}
-                                  </div>
-                              </button>
-                          )}
-                      </div>
-                      
-                      <div className="flex-1 min-w-0 py-1">
-                          <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                              <h3 className="font-bold text-gray-900 truncate text-lg">{project.templateName}</h3>
-                              <StatusBadge status={project.status} />
-                          </div>
-                          <div className="flex items-center gap-3 mb-2 text-sm text-gray-500 font-medium">
-                              <span className="bg-gray-100 px-2 py-0.5 rounded text-gray-600 text-xs uppercase tracking-wide font-bold">{project.type?.replace('_', ' ')}</span>
-                              <span>• {new Date(project.createdAt).toLocaleDateString()}</span>
-                              {project.cost && <span>• {project.cost} Credits</span>}
+          <div className="flex-1 overflow-y-auto pb-10 pr-2">
+              <div className="grid grid-cols-1 gap-4">
+                  {filteredProjects.map(project => (
+                      <div key={project.id} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-5 hover:shadow-lg transition-all duration-300 group">
+                          <div className="w-full sm:w-40 aspect-video bg-gray-100 dark:bg-gray-900 rounded-xl overflow-hidden flex-shrink-0 relative shadow-inner border border-gray-100 dark:border-gray-700">
+                              <img 
+                                  src={project.thumbnailUrl || 'https://via.placeholder.com/320x180?text=Generating...'} 
+                                  alt="Thumbnail" 
+                                  className="w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700" 
+                              />
+                              {project.status === ProjectStatus.COMPLETED && project.videoUrl && (
+                                  <button 
+                                      onClick={(e) => handleOpenItem(e, project)}
+                                      className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/40 transition-colors cursor-pointer"
+                                  >
+                                      <div className="bg-white/90 rounded-full p-3 shadow-lg transform scale-90 group-hover:scale-100 transition-transform hover:bg-white">
+                                         {project.type === 'FASHION_SHOOT' ? (
+                                             <ImageIcon className="text-rose-600" size={20} />
+                                         ) : (
+                                             <Play className="text-indigo-600 fill-current ml-0.5" size={20}/>
+                                         )}
+                                      </div>
+                                  </button>
+                              )}
                           </div>
                           
-                          {project.error && (
-                              <div className="text-xs text-red-600 mt-2 bg-red-50 border border-red-100 px-3 py-1.5 rounded-lg inline-flex items-center gap-2 max-w-full">
-                                  <AlertOctagon size={12} />
-                                  <span className="truncate">{project.error}</span>
+                          <div className="flex-1 min-w-0 py-1 w-full text-center sm:text-left">
+                              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1.5">
+                                  <h3 className="font-bold text-gray-900 dark:text-white truncate text-lg max-w-full">{project.templateName}</h3>
+                                  <StatusBadge status={project.status} />
                               </div>
-                          )}
-                      </div>
+                              <div className="flex items-center justify-center sm:justify-start gap-3 mb-2 text-sm text-gray-500 dark:text-gray-400 font-medium">
+                                  <span className="bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded text-gray-600 dark:text-gray-300 text-xs uppercase tracking-wide font-bold">{project.type?.replace('_', ' ')}</span>
+                                  <span>• {new Date(project.createdAt).toLocaleDateString()}</span>
+                                  {project.cost && <span>• {project.cost} Credits</span>}
+                              </div>
+                              
+                              {project.error && (
+                                  <div className="text-xs text-red-600 dark:text-red-400 mt-2 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 px-3 py-1.5 rounded-lg inline-flex items-center gap-2 max-w-full">
+                                      <AlertOctagon size={12} />
+                                      <span className="truncate">{project.error}</span>
+                                  </div>
+                              )}
+                          </div>
 
-                      <div className="flex items-center gap-3 pr-2">
-                          {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
-                            <>
-                                <button 
-                                    onClick={(e) => handleOpenItem(e, project)}
-                                    className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm"
-                                >
-                                    {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />}
-                                    <span>View</span>
-                                </button>
-                                <a 
-                                    href={project.videoUrl} 
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    download={`project-${project.id}.${project.type === 'FASHION_SHOOT' ? 'png' : 'mp4'}`}
-                                    className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all shadow-sm"
-                                >
-                                    <Download size={16} />
-                                    <span className="hidden sm:inline">Download</span>
-                                </a>
-                            </>
-                          ) : project.status === ProjectStatus.FAILED ? (
-                             <div className="text-red-500 font-medium text-sm bg-red-50 px-4 py-2 rounded-xl border border-red-100">Generation Failed</div>
-                          ) : (
-                             <div className="w-32 h-2 bg-gray-100 rounded-full overflow-hidden">
-                                  <div className="h-full bg-indigo-500 animate-pulse w-2/3 rounded-full"></div>
-                             </div>
-                          )}
+                          <div className="flex items-center gap-3 w-full sm:w-auto justify-center">
+                              {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
+                                <>
+                                    <button 
+                                        onClick={(e) => handleOpenItem(e, project)}
+                                        className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-50 dark:hover:bg-gray-600 transition-all shadow-sm"
+                                    >
+                                        {project.type === 'FASHION_SHOOT' ? <ImageIcon size={16} /> : <Play size={16} />}
+                                        <span>View</span>
+                                    </button>
+                                    <a 
+                                        href={project.videoUrl} 
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        download={`project-${project.id}.${project.type === 'FASHION_SHOOT' ? 'png' : 'mp4'}`}
+                                        className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all shadow-sm w-full sm:w-auto justify-center"
+                                    >
+                                        <Download size={16} />
+                                        <span className="sm:hidden">Download</span>
+                                        <span className="hidden sm:inline">Download</span>
+                                    </a>
+                                </>
+                              ) : project.status === ProjectStatus.FAILED ? (
+                                 <div className="text-red-500 font-medium text-sm bg-red-50 dark:bg-red-900/20 px-4 py-2 rounded-xl border border-red-100 dark:border-red-900/30">Failed</div>
+                              ) : (
+                                 <div className="w-32 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                                      <div className="h-full bg-indigo-500 animate-pulse w-2/3 rounded-full"></div>
+                                 </div>
+                              )}
+                          </div>
                       </div>
-                  </div>
-              ))}
+                  ))}
+              </div>
           </div>
         )}
       </div>

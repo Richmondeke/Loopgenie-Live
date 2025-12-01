@@ -143,10 +143,10 @@ export const stitchVideoFrames = async (
   console.log("Starting client-side video stitching with Ken Burns, Captions & BG Music...");
 
   return new Promise(async (resolve, reject) => {
-    // Safety timeout
+    // Safety timeout - Increased to 10 minutes (600,000ms)
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
-    }, 180000); // 3 mins
+    }, 600000); 
 
     try {
         // 1. Prepare Canvas

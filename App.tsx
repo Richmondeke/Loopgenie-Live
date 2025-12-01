@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -331,6 +332,8 @@ const App: React.FC = () => {
                 onSelectTemplate={handleSelectTemplate} 
                 heyGenKey={heyGenKey} 
                 initialView={galleryInitialView}
+                userProfile={userProfile}
+                recentProjects={projects}
             />
         );
       case AppView.PROJECTS:
@@ -400,7 +403,7 @@ const App: React.FC = () => {
       />
 
       <main className="flex-1 overflow-hidden flex flex-col relative">
-        <header className="md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between">
+        <header className="md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between z-20 relative">
              <div className="font-bold text-gray-900 dark:text-white">LoopGenie</div>
              <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-gray-600 dark:text-gray-300">
                 <Menu />
@@ -418,7 +421,8 @@ const App: React.FC = () => {
             </div>
         )}
 
-        <div className="flex-1 overflow-hidden p-6">
+        {/* Main Content Area - Updated to allow children to control scroll */}
+        <div className="flex-1 relative h-full w-full">
             {renderContent()}
         </div>
       </main>

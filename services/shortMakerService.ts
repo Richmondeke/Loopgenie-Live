@@ -98,7 +98,7 @@ AspectRatio: "${ratioText}"
         maxOutputTokens: 8192,
         tools: [{ googleSearch: {} }] 
       }
-    }), 30000, "Script generation timed out.") as GenerateContentResponse;
+    }), 90000, "Script generation timed out.") as GenerateContentResponse;
 
     let text = response.text || "";
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();

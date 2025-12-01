@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ArrowLeft, Sparkles, Video, Loader2, Wand2, Upload, Plus, Film, Image as ImageIcon, Music, Trash2, Pause, AlertCircle, Zap, Download, Clapperboard, Camera, Play, CheckCircle, RectangleHorizontal, RectangleVertical, Headphones } from 'lucide-react';
 import { Template, HeyGenAvatar, HeyGenVoice, ProjectStatus, APP_COSTS } from '../types';
@@ -652,14 +653,14 @@ export const Editor: React.FC<EditorProps> = (props) => {
     else content = <AvatarEditor {...props} />;
 
     return (
-        <div className="h-full flex flex-col">
-            <div className="flex items-center gap-3 mb-6 flex-shrink-0">
+        <div className="h-full flex flex-col p-4 md:p-6">
+            <div className="flex items-center gap-3 mb-4 flex-shrink-0">
                 <button onClick={onBack} className="flex items-center gap-2 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors group">
                     <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform" />
                     <span className="text-sm font-bold uppercase tracking-wide">Back</span>
                 </button>
             </div>
-            <div className="flex-1 overflow-hidden">{content}</div>
+            <div className="flex-1 overflow-hidden rounded-xl shadow-sm">{content}</div>
         </div>
     );
 };
