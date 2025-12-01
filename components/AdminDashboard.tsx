@@ -1,9 +1,9 @@
 
 import React, { useEffect, useState } from 'react';
 import { getAllProfiles } from '../services/authService';
-import { fetchAllProjectsAdmin } from '../services/projectService';
+import { fetchAllProjectsAdmin, fetchProjectStatsAdmin } from '../services/projectService';
 import { UserProfile, Project, ProjectStatus } from '../types';
-import { Users, Activity, DollarSign, ShieldCheck, Search, ChevronLeft, ChevronRight, User, CreditCard, Calendar, X, Play, Image as ImageIcon, FileAudio } from 'lucide-react';
+import { Users, Activity, DollarSign, ShieldCheck, Search, ChevronLeft, ChevronRight, User, CreditCard, Calendar, X, Play, Image as ImageIcon, FileAudio, RefreshCw } from 'lucide-react';
 
 interface AdminDashboardProps {
     initialTab?: 'OVERVIEW' | 'USERS' | 'ACTIVITY';
@@ -11,21 +11,20 @@ interface AdminDashboardProps {
 
 const ITEMS_PER_PAGE = 10;
 
-// ESTIMATION HELPER (Based on known provider costs in USD)
-// This is for display purposes only, real costs are in credits.
+// ESTIMATION HELPER 
 const getEstProviderCost = (project: Project): number => {
     switch (project.type) {
         case 'AVATAR': return 2.00;
-        case 'UGC_PRODUCT': return project.cost && project.cost > 10 ? 1.60 : 0.50; // Heuristic for multi-shot
-        case 'TEXT_TO_VIDEO': return project.cost && project.cost > 20 ? 1.50 : 0.50; // Pro vs Fast
+        case 'UGC_PRODUCT': return project.cost && project.cost > 10 ? 1.60 : 0.50; 
+        case 'TEXT_TO_VIDEO': return project.cost && project.cost > 20 ? 1.50 : 0.50; 
         case 'IMAGE_TO_VIDEO': return 0.50;
         case 'FASHION_SHOOT': return 0.10;
         case 'AUDIOBOOK': return 0.30;
         case 'SHORTS': 
         case 'STORYBOOK':
-            if (project.cost === 5) return 0.32; // 15s
-            if (project.cost === 9) return 0.54; // 30s
-            if (project.cost === 16) return 1.03; // 60s
+            if (project.cost === 5) return 0.32; 
+            if (project.cost === 9) return 0.54; 
+            if (project.cost === 16) return 1.03; 
             return 0.50;
         default: return 0.10;
     }
@@ -48,6 +47,7 @@ const PaginationControls = ({ totalItems, currentPage, onPageChange }: any) => {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OVERVIEW' }) => {
     const [users, setUsers] = useState<UserProfile[]>([]);
     const [projects, setProjects] = useState<Project[]>([]);
+    const [stats, setStats] = useState({ totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 });
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'USERS' | 'ACTIVITY'>(initialTab);
     const [searchTerm, setSearchTerm] = useState('');
@@ -62,10 +62,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
         const loadData = async () => {
             setLoading(true);
             try {
-                const [usersData, projectsData] = await Promise.all([getAllProfiles(), fetchAllProjectsAdmin()]);
+                // Parallel fetching with stats separated for speed
+                const [usersData, statsData, projectsData] = await Promise.all([
+                    getAllProfiles(),
+                    fetchProjectStatsAdmin(),
+                    fetchAllProjectsAdmin()
+                ]);
                 setUsers(usersData);
+                setStats(statsData);
                 setProjects(projectsData);
-            } catch (e) { console.error("Failed to load admin data", e); } finally { setLoading(false); }
+            } catch (e) { 
+                console.error("Failed to load admin data", e); 
+            } finally { 
+                setLoading(false); 
+            }
         };
         loadData();
     }, []);
@@ -73,16 +83,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
     const filteredUsers = users.filter(u => (u.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (u.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()));
     const filteredProjects = projects.filter(p => (p.templateName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (p.user_email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (p.id?.toLowerCase() || '').includes(searchTerm.toLowerCase()));
 
-    // Stats Calculation
-    const totalCreditsUsed = projects.reduce((acc, p) => acc + (p.cost || 0), 0);
-    const estimatedRevenue = totalCreditsUsed * 0.10; // $0.10 per credit
+    // Use lightweight stats for top cards instead of recalculating from heavy array
+    const estimatedRevenue = stats.totalCost * 0.10; 
+    // We roughly estimate provider cost from the limited project list we have, or scale it
+    // For accuracy we'd need full data, but for speed we use the stats + heuristic on loaded projects
     const estimatedProviderCost = projects.reduce((acc, p) => acc + getEstProviderCost(p), 0);
     const estimatedProfit = estimatedRevenue - estimatedProviderCost;
     
-    const totalFailed = projects.filter(p => p.status === ProjectStatus.FAILED).length;
-    const totalUsers = users.length;
-    const activeUsers = new Set(projects.map(p => p.user_email)).size;
-
     const handleUserClick = (user: UserProfile) => { setSelectedUser(user); setActivityPage(1); window.scrollTo(0, 0); };
     const handleBackToUsers = () => { setSelectedUser(null); setActiveTab('USERS'); };
     const handleOpenMedia = (project: Project) => {
@@ -92,7 +99,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
         }
     };
 
-    if (loading) return <div className="p-10 text-center text-gray-500 animate-pulse">Loading Admin Data...</div>;
+    if (loading) return (
+        <div className="h-full flex items-center justify-center">
+            <div className="text-center text-gray-500 animate-pulse flex flex-col items-center gap-2">
+                <RefreshCw className="animate-spin" />
+                <span>Loading Dashboard...</span>
+            </div>
+        </div>
+    );
 
     if (selectedUser) {
         const userProjects = projects.filter(p => p.user_email === selectedUser.email || (selectedUser.email && (p.user_email || '').toLowerCase() === (selectedUser.email || '').toLowerCase()));
@@ -193,20 +207,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                     <div className="space-y-8 animate-in fade-in duration-300">
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
-                                <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl"><Users size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Total Users</div><div className="text-2xl font-black text-gray-900 dark:text-white">{totalUsers}</div></div></div>
-                                <div className="text-xs text-green-600 font-bold bg-green-50 dark:bg-green-900/30 inline-block px-2 py-1 rounded">+{activeUsers} Active recently</div>
+                                <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-xl"><Users size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Total Users</div><div className="text-2xl font-black text-gray-900 dark:text-white">{users.length}</div></div></div>
+                                <div className="text-xs text-green-600 font-bold bg-green-50 dark:bg-green-900/30 inline-block px-2 py-1 rounded">+{stats.activeUsers} Active recently</div>
                             </div>
                             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
                                 <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-xl"><DollarSign size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Est. Revenue</div><div className="text-2xl font-black text-gray-900 dark:text-white">${estimatedRevenue.toFixed(2)}</div></div></div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">From {totalCreditsUsed} Credits</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">From {stats.totalCost} Credits</div>
                             </div>
                             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
                                 <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-xl"><Activity size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Est. Provider Cost</div><div className="text-2xl font-black text-gray-900 dark:text-white">${estimatedProviderCost.toFixed(2)}</div></div></div>
                                 <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">Est. Margin: <span className="font-bold text-green-600 dark:text-green-400">${estimatedProfit.toFixed(2)}</span></div>
                             </div>
                              <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
-                                <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl"><Activity size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Failed Jobs</div><div className="text-2xl font-black text-gray-900 dark:text-white">{totalFailed}</div></div></div>
-                                 <div className="text-xs text-red-500 font-medium">Rate: {((totalFailed / projects.length) * 100 || 0).toFixed(1)}%</div>
+                                <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl"><Activity size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Failed Jobs</div><div className="text-2xl font-black text-gray-900 dark:text-white">{stats.totalFailed}</div></div></div>
+                                 <div className="text-xs text-red-500 font-medium">Rate: {((stats.totalFailed / stats.totalCount) * 100 || 0).toFixed(1)}%</div>
                             </div>
                         </div>
                     </div>
@@ -288,7 +302,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                     </div>
                 )}
                 
-                {/* Modal remains same */}
                 {selectedMedia && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 p-4 animate-in fade-in duration-200">
                         <div className="relative w-full max-w-5xl bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">

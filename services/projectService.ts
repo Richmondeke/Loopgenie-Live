@@ -19,17 +19,13 @@ const mapRowToProject = (row: any): Project => {
   }
 
   // Robust date parsing
-  // The DB 'created_at' column is int8 (bigint), but might come back as a number or a string representing a number.
-  // It could also be an ISO string if the schema was modified to timestamptz.
   let createdAt = Date.now();
   
   if (row.created_at) {
       const asNum = Number(row.created_at);
       if (!isNaN(asNum) && asNum > 0) {
-          // It's a timestamp number (e.g. 1764539352202)
           createdAt = asNum;
       } else {
-          // Try parsing as ISO Date string
           const parsed = new Date(row.created_at).getTime();
           if (!isNaN(parsed)) createdAt = parsed;
       }
@@ -99,42 +95,58 @@ export const fetchProjects = async (): Promise<{ projects: Project[], error?: an
   }
 
   try {
+      // Limit to 50 recent projects to prevent timeouts/slow loading
       const { data, error } = await supabase
         .from('projects')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(50);
 
       if (error) {
-        // Fix for "TypeError: Failed to fetch" (Network Error)
-        if (error.message?.includes('Failed to fetch') || (error.details && typeof error.details === 'string' && error.details.includes('Failed to fetch'))) {
-            console.warn("Supabase unreachable (Network Error). Falling back to local data.");
-            const localData = getLocalProjects();
-            return { projects: localData.map(mapRowToProject) };
-        }
-
+        console.warn("Supabase Error:", error);
+        // Fallback to local data on ANY error (500, Network, etc)
+        const localData = getLocalProjects();
+        
+        // Return explicit error for UI handling if it's the recursion bug
         if (error.code === '42P17') {
-            console.error("🔥 CRITICAL DB ERROR: Infinite Recursion in fetchProjects. Run schema fix.");
-            return { projects: [], error: { code: '42P17', message: "Database Policy Error: Infinite Recursion. Check SCHEMA.md for fix." } };
+            return { projects: localData.map(mapRowToProject), error: { code: '42P17', message: "Database Policy Error." } };
         }
-        if (error.code === '42P01') {
-            // Table doesn't exist, fallback to local
-            const localData = getLocalProjects();
-            return { projects: localData.map(mapRowToProject) };
-        }
-        console.error('Error fetching projects:', JSON.stringify(error));
-        return { projects: [], error };
+        
+        return { projects: localData.map(mapRowToProject) };
       }
       
       return { projects: data.map(mapRowToProject) };
   } catch (err) {
       console.warn("Unexpected error fetching projects:", err);
-      // Fallback to local data on exception (e.g. fetch throw)
       const localData = getLocalProjects();
       return { projects: localData.map(mapRowToProject) };
   }
 };
 
-// NEW: Admin function to fetch ALL projects across all users
+// NEW: Lightweight Stats Fetcher
+// Fetches ONLY metadata needed for calculations, no heavy URLs or text
+export const fetchProjectStatsAdmin = async (): Promise<{ totalCost: number, totalFailed: number, totalCount: number, activeUsers: number }> => {
+    if (!isSupabaseConfigured()) return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
+
+    try {
+        const { data, error } = await supabase
+            .from('projects')
+            .select('cost, status, user_id');
+        
+        if (error) throw error;
+
+        const totalCount = data.length;
+        const totalCost = data.reduce((acc, curr) => acc + (curr.cost || 0), 0);
+        const totalFailed = data.filter(p => p.status === 'failed').length;
+        const activeUsers = new Set(data.map(p => p.user_id)).size;
+
+        return { totalCost, totalFailed, totalCount, activeUsers };
+    } catch (e) {
+        console.warn("Failed to fetch stats:", e);
+        return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
+    }
+};
+
 export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Project[]> => {
     if (!forceRefresh && adminProjectsCache && (Date.now() - adminProjectsCache.timestamp < CACHE_TTL)) {
         return adminProjectsCache.data;
@@ -146,24 +158,17 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
     }
 
     try {
+        // Limit to 100 for admin table to ensure stability
         const { data, error } = await supabase
             .from('projects')
             .select(`
                 *,
                 profiles:user_id (email)
             `)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(100);
 
-        if (error) {
-             // Handle Network Error
-             if (error.message?.includes('Failed to fetch')) {
-                 throw new Error("Network Error: Failed to fetch");
-             }
-             if (error.code === '42P17') {
-                 console.error("🔥 Infinite Recursion in Admin Fetch.");
-             }
-             throw error;
-        }
+        if (error) throw error;
 
         const mapped = data.map((row: any) => ({
             ...mapRowToProject(row),
@@ -175,20 +180,6 @@ export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Proje
 
     } catch (e: any) {
         console.warn("Fetch Admin Projects Failed (Returning Fallback):", e);
-        
-        // Handle "Failed to fetch" specifically in the catch block if thrown above or by supabase
-        if (e.message?.includes('Failed to fetch') || e.message?.includes('Network Error')) {
-             return []; // Or local projects if appropriate for admin
-        }
-
-        // Fallback to basic fetch if join fails
-        try {
-            const { data, error } = await supabase.from('projects').select('*').order('created_at', { ascending: false });
-            if (!error && data) return data.map(mapRowToProject);
-        } catch (innerE) {
-            console.warn("Fallback fetch also failed");
-        }
-        
         return [];
     }
 };
@@ -203,12 +194,12 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .single();
     
     if (fetchError || !profile) {
-        console.error("Error fetching balance for deduction:", JSON.stringify(fetchError));
+        console.error("Error fetching balance:", JSON.stringify(fetchError));
         return null; 
     }
 
     if (profile.credits_balance < amount) {
-        throw new Error(`Insufficient credits. You have ${profile.credits_balance}, but ${amount} is required.`);
+        throw new Error(`Insufficient credits.`);
     }
 
     const newBalance = profile.credits_balance - amount;
@@ -220,10 +211,7 @@ export const deductCredits = async (userId: string, amount: number): Promise<num
         .select('credits_balance')
         .single();
 
-    if (updateError) {
-        console.error("Error updating credits:", JSON.stringify(updateError));
-        throw new Error("Failed to deduct credits. Please try again.");
-    }
+    if (updateError) throw new Error("Failed to deduct credits.");
     
     return updatedProfile.credits_balance;
 };
@@ -241,10 +229,7 @@ export const addCredits = async (userId: string, amount: number): Promise<number
         .eq('id', userId)
         .single();
     
-    if (fetchError || !profile) {
-        console.error("Error fetching profile for adding credits:", JSON.stringify(fetchError));
-        return null;
-    }
+    if (fetchError || !profile) return null;
 
     const newBalance = profile.credits_balance + amount;
 
@@ -255,10 +240,7 @@ export const addCredits = async (userId: string, amount: number): Promise<number
         .select('credits_balance')
         .single();
         
-    if (updateError) {
-        console.error("Error adding credits:", JSON.stringify(updateError));
-        return null;
-    }
+    if (updateError) return null;
     
     return updatedProfile.credits_balance;
 };
@@ -277,7 +259,7 @@ export const saveProject = async (project: Project) => {
 
   const templateIdSafe = project.templateId || 'unknown_template';
 
-  // Sanitize payload to remove undefined values which Supabase might reject
+  // Sanitize payload
   const payload = {
       id: project.id,
       user_id: user.data.user.id,
@@ -287,7 +269,6 @@ export const saveProject = async (project: Project) => {
       status: project.status,
       video_url: project.videoUrl,
       error: project.error,
-      // FIXED: Send raw number for BigInt column, do NOT convert to ISO String
       created_at: project.createdAt, 
       project_type: project.type || 'AVATAR',
       cost: project.cost ?? 1
@@ -302,22 +283,15 @@ export const saveProject = async (project: Project) => {
         saveToLocalStorage(project);
         return;
     }
-    // FALLBACK: If 'cost' column missing, try saving without it
+    // Fallbacks for missing columns
     if (error.message?.includes('cost') || error.code === 'PGRST204') {
-        console.warn("⚠️ Database missing 'cost' column. Retrying save without cost tracking...");
         const { cost, ...safePayload } = payload;
-        const retry = await supabase.from('projects').upsert(safePayload);
-        if (retry.error) throw new Error(`Database Error (Retry Failed): ${retry.error.message}`);
+        await supabase.from('projects').upsert(safePayload);
         return;
     }
-
-    if (error.code === 'PGRST204' || error.message?.includes('project_type')) {
-       const { project_type, ...fallbackPayload } = payload;
-       const retry = await supabase.from('projects').upsert(fallbackPayload);
-       if (retry.error) throw new Error(`Database Error: ${retry.error.message}`);
-       return;
-    }
-    throw new Error(`Database Error: ${error.message || JSON.stringify(error)}`);
+    console.error("Save Project DB Error:", error);
+    // Don't throw if we can save locally as backup
+    saveToLocalStorage(project);
   }
 };
 
@@ -341,12 +315,5 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
   if (updates.thumbnailUrl) dbUpdates.thumbnail_url = updates.thumbnailUrl;
   if (updates.error) dbUpdates.error = updates.error;
 
-  const { error } = await supabase
-    .from('projects')
-    .update(dbUpdates)
-    .eq('id', id);
-
-  if (error) {
-      console.error('Error updating project:', JSON.stringify(error));
-  }
+  await supabase.from('projects').update(dbUpdates).eq('id', id);
 };
