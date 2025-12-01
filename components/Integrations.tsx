@@ -1,11 +1,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { IntegrationStatus, ScheduledPost } from '../types';
-import { Twitter, Send, Calendar, Clock, Image as ImageIcon, X, Trash2, CheckCircle, AlertCircle, Loader2, Linkedin, Instagram, LogOut, Copy, ExternalLink, RefreshCw } from 'lucide-react';
+import { Twitter, Send, Calendar, Clock, X, LogOut, Linkedin, Instagram, Loader2, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Zap } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
 export const Integrations: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
+    const [isProcessingCallback, setIsProcessingCallback] = useState(false);
     const [integrations, setIntegrations] = useState<IntegrationStatus[]>([
         { id: 'twitter', name: 'X (Twitter)', connected: false },
         { id: 'linkedin', name: 'LinkedIn', connected: false },
@@ -18,16 +19,66 @@ export const Integrations: React.FC = () => {
     const [selectedPlatform, setSelectedPlatform] = useState<'twitter' | 'linkedin' | 'instagram'>('twitter');
     const [isPosting, setIsPosting] = useState(false);
 
-    // --- Connection Modal State ---
-    const [connectModalOpen, setConnectModalOpen] = useState(false);
-    const [platformToConnect, setPlatformToConnect] = useState<string | null>(null);
-    const [usernameInput, setUsernameInput] = useState('');
-    const [isSavingConnection, setIsSavingConnection] = useState(false);
-
-    // --- Load Data ---
+    // --- Load Data & Handle Callback ---
     useEffect(() => {
-        fetchData();
+        const init = async () => {
+            await handleAuthCallback();
+            await fetchData();
+        };
+        init();
     }, []);
+
+    const handleAuthCallback = async () => {
+        // Check for URL params returned from the Edge Function
+        // Expected format: ?connected=true&platform=twitter&username=someuser
+        const params = new URLSearchParams(window.location.search);
+        const connected = params.get('connected');
+        const platform = params.get('platform');
+        const error = params.get('error');
+        
+        if (error) {
+            alert(`Connection failed: ${error}`);
+            // Clean URL
+            window.history.replaceState({}, '', window.location.pathname);
+            return;
+        }
+
+        if (connected === 'true' && platform) {
+            setIsProcessingCallback(true);
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                    // We use the username returned by the Edge Function, or fallback to user metadata
+                    const mockUsername = params.get('username') || user.user_metadata?.full_name?.replace(/\s/g, '').toLowerCase() || 'connected_user';
+                    const handle = mockUsername.startsWith('@') ? mockUsername : `@${mockUsername}`;
+
+                    // Persist connection to ensure UI state is synced
+                    // Even if Edge Function saves it, this double-check ensures the frontend has the record immediately.
+                    const { error } = await supabase
+                        .from('social_integrations')
+                        .upsert({
+                            user_id: user.id,
+                            platform: platform,
+                            username: handle,
+                            connected: true,
+                            avatar_url: `https://ui-avatars.com/api/?name=${mockUsername}&background=random&color=fff&bold=true`
+                        }, { onConflict: 'user_id, platform' });
+
+                    if (error) throw error;
+
+                    // Clean URL to prevent re-processing on refresh
+                    window.history.replaceState({}, '', window.location.pathname);
+                    
+                    // Force refresh data
+                    await fetchData();
+                }
+            } catch (e) {
+                console.error("Callback processing failed:", e);
+            } finally {
+                setIsProcessingCallback(false);
+            }
+        }
+    };
 
     const fetchData = async () => {
         try {
@@ -74,44 +125,30 @@ export const Integrations: React.FC = () => {
         }
     };
 
-    const openConnectModal = (platform: string) => {
-        setPlatformToConnect(platform);
-        setUsernameInput('');
-        setConnectModalOpen(true);
-    };
+    const initiateConnection = async (platform: string) => {
+        setIsLoading(true);
 
-    const handleSaveConnection = async () => {
-        if (!usernameInput || !platformToConnect) return;
-        
-        setIsSavingConnection(true);
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) throw new Error("Please log in to save connections.");
-
-            const handle = usernameInput.startsWith('@') ? usernameInput : `@${usernameInput}`;
+            // 1. Get current URL to return to after auth
+            const returnUrl = window.location.origin + window.location.pathname;
             
-            // Persist to DB
-            const { error } = await supabase
-                .from('social_integrations')
-                .upsert({
-                    user_id: user.id,
-                    platform: platformToConnect,
-                    username: handle,
-                    connected: true,
-                    avatar_url: `https://ui-avatars.com/api/?name=${handle}&background=random&color=fff`
-                }, { onConflict: 'user_id, platform' });
-
-            if (error) throw error;
+            // 2. Construct Edge Function URL
+            // We use the project ref from the Supabase client config
+            const supabaseUrl = (supabase as any).supabaseUrl || 'https://ysetjcltrfktdamldrnl.supabase.co';
             
-            // Refresh local state immediately
-            await fetchData();
-            setConnectModalOpen(false);
+            // Target: https://<project>.supabase.co/functions/v1/auth-<platform>
+            // This matches the "Option A" architecture where the frontend redirects to the Edge Function
+            const authUrl = `${supabaseUrl}/functions/v1/auth-${platform}?redirect_url=${encodeURIComponent(returnUrl)}`;
+            
+            console.log(`Redirecting to Edge Function: ${authUrl}`);
+            
+            // 3. Redirect the browser
+            window.location.href = authUrl;
 
-        } catch (e: any) {
-            console.error(e);
-            alert("Failed to connect: " + (e.message || "Unknown error"));
-        } finally {
-            setIsSavingConnection(false);
+        } catch (e) {
+            console.error("Failed to initiate connection", e);
+            setIsLoading(false);
+            alert("Could not start connection flow. Please check console.");
         }
     };
 
@@ -166,14 +203,12 @@ export const Integrations: React.FC = () => {
                 intentUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
                 window.open(intentUrl, '_blank', 'width=550,height=420');
             } else if (selectedPlatform === 'linkedin') {
-                // LinkedIn text sharing is limited via URL, usually shares a URL. 
-                // We'll fallback to copying to clipboard for LinkedIn/Instagram
                 await navigator.clipboard.writeText(content);
-                alert("Text copied to clipboard! Opening LinkedIn...");
+                alert("Text copied! Opening LinkedIn...");
                 window.open('https://www.linkedin.com/feed/', '_blank');
             } else {
                  await navigator.clipboard.writeText(content);
-                 alert("Text copied to clipboard! Opening Instagram...");
+                 alert("Text copied! Opening Instagram...");
                  window.open('https://www.instagram.com/', '_blank');
             }
 
@@ -199,12 +234,27 @@ export const Integrations: React.FC = () => {
         return 'bg-gray-700';
     };
 
+    if (isProcessingCallback) {
+        return (
+            <div className="h-full flex flex-col items-center justify-center bg-black text-white">
+                <Loader2 size={48} className="animate-spin text-indigo-500 mb-4" />
+                <h2 className="text-xl font-bold">Connecting Account...</h2>
+                <p className="text-gray-400">Verifying tokens and saving connection.</p>
+            </div>
+        );
+    }
+
     return (
         <div className="h-full overflow-y-auto p-4 md:p-8 bg-black text-gray-100 font-sans">
             <div className="max-w-6xl mx-auto">
-                <div className="mb-8">
-                    <h2 className="text-3xl font-bold text-white mb-2">Integrations</h2>
-                    <p className="text-gray-400">Connect your social accounts to auto-post your generated content.</p>
+                <div className="mb-8 flex justify-between items-end">
+                    <div>
+                        <h2 className="text-3xl font-bold text-white mb-2">Integrations</h2>
+                        <p className="text-gray-400">Connect your social accounts to auto-post your generated content.</p>
+                    </div>
+                    <button onClick={fetchData} className="p-2 text-gray-500 hover:text-white transition-colors" title="Refresh Connections">
+                        <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
+                    </button>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -261,9 +311,11 @@ export const Integrations: React.FC = () => {
                                     </div>
                                 ) : (
                                     <button 
-                                        onClick={() => openConnectModal(integ.id)}
-                                        className="w-full py-3 bg-white hover:bg-gray-100 text-black text-sm font-bold rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 relative z-10"
+                                        onClick={() => initiateConnection(integ.id)}
+                                        disabled={isLoading}
+                                        className="w-full py-3 bg-white hover:bg-gray-100 text-black text-sm font-bold rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 relative z-10 disabled:opacity-70 disabled:cursor-wait"
                                     >
+                                        {isLoading ? <Loader2 size={16} className="animate-spin" /> : <ExternalLink size={16} />}
                                         Connect {integ.name}
                                     </button>
                                 )}
@@ -294,7 +346,7 @@ export const Integrations: React.FC = () => {
                                             <h4 className="text-white font-bold mb-1">No accounts connected</h4>
                                             <p className="text-gray-400 text-sm mb-4 max-w-xs">Connect X (Twitter) or LinkedIn on the left to start scheduling posts.</p>
                                             <button 
-                                                onClick={() => openConnectModal('twitter')}
+                                                onClick={() => initiateConnection('twitter')}
                                                 className="text-indigo-400 text-sm font-bold hover:text-indigo-300 transition-colors"
                                             >
                                                 Connect Now &rarr;
@@ -387,69 +439,9 @@ export const Integrations: React.FC = () => {
                                 )}
                             </div>
                         </div>
-
                     </div>
                 </div>
             </div>
-
-            {/* --- CONNECTION MODAL --- */}
-            {connectModalOpen && platformToConnect && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-                    <div className="bg-gray-900 border border-gray-700 rounded-3xl w-full max-w-md p-8 shadow-2xl relative overflow-hidden">
-                        
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500"></div>
-                        
-                        <button 
-                            onClick={() => setConnectModalOpen(false)} 
-                            className="absolute top-4 right-4 text-gray-500 hover:text-white bg-gray-800 hover:bg-gray-700 p-1.5 rounded-full transition-colors"
-                        >
-                            <X size={20} />
-                        </button>
-
-                        <div className="text-center mb-8">
-                            <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl ${getPlatformColor(platformToConnect)}`}>
-                                {platformToConnect === 'twitter' && <Twitter size={40} fill="currentColor" />}
-                                {platformToConnect === 'linkedin' && <Linkedin size={40} fill="currentColor" />}
-                                {platformToConnect === 'instagram' && <Instagram size={40} />}
-                            </div>
-                            <h3 className="text-2xl font-bold text-white mb-2">Connect {platformToConnect === 'twitter' ? 'X (Twitter)' : 'Account'}</h3>
-                            <p className="text-gray-400 text-sm leading-relaxed px-4">
-                                Enter your handle below to link this account. We'll use this to tag your posts and manage your history.
-                            </p>
-                        </div>
-
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase mb-2 ml-1">Username / Handle</label>
-                                <div className="relative group">
-                                    <span className="absolute left-4 top-3.5 text-gray-500 font-bold group-focus-within:text-indigo-500 transition-colors">@</span>
-                                    <input 
-                                        type="text" 
-                                        value={usernameInput}
-                                        onChange={(e) => setUsernameInput(e.target.value)}
-                                        className="w-full bg-black border border-gray-700 rounded-xl py-3 pl-8 pr-4 text-white font-bold placeholder-gray-700 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                                        placeholder="username"
-                                        autoFocus
-                                    />
-                                </div>
-                            </div>
-                            
-                            <button 
-                                onClick={handleSaveConnection}
-                                disabled={!usernameInput.trim() || isSavingConnection}
-                                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-indigo-500/20 active:scale-95 flex items-center justify-center gap-2"
-                            >
-                                {isSavingConnection ? <Loader2 className="animate-spin" /> : <CheckCircle size={18} />}
-                                Save Connection
-                            </button>
-                            
-                            <p className="text-center text-xs text-gray-600">
-                                By connecting, you agree to our Terms of Service.
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

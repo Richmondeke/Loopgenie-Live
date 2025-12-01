@@ -69,7 +69,7 @@
 **Description:** Stores connected social accounts.
 
 ```sql
-CREATE TABLE public.social_integrations (
+CREATE TABLE IF NOT EXISTS public.social_integrations (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES auth.users(id) NOT NULL,
   platform TEXT NOT NULL,
@@ -81,6 +81,9 @@ CREATE TABLE public.social_integrations (
 );
 
 ALTER TABLE public.social_integrations ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policy if any to avoid conflicts during testing
+DROP POLICY IF EXISTS "Users can manage their own integrations" ON public.social_integrations;
 
 CREATE POLICY "Users can manage their own integrations" 
 ON public.social_integrations FOR ALL 
@@ -94,7 +97,7 @@ USING (auth.uid() = user_id);
 **Description:** Stores history of posts.
 
 ```sql
-CREATE TABLE public.social_posts (
+CREATE TABLE IF NOT EXISTS public.social_posts (
   id TEXT PRIMARY KEY,
   user_id UUID REFERENCES auth.users(id) NOT NULL,
   content TEXT,
@@ -106,6 +109,9 @@ CREATE TABLE public.social_posts (
 );
 
 ALTER TABLE public.social_posts ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policy if any
+DROP POLICY IF EXISTS "Users can manage their own posts" ON public.social_posts;
 
 CREATE POLICY "Users can manage their own posts" 
 ON public.social_posts FOR ALL 
