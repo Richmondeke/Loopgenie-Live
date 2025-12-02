@@ -3,7 +3,7 @@ import React, { useState, useRef } from 'react';
 import { 
     Upload, FileVideo, Wand2, Play, CheckCircle, 
     Loader2, Download, Database, LayoutTemplate, 
-    ScanFace, ArrowRight, RefreshCw, AlertCircle, Link, Globe, Cookie
+    ScanFace, ArrowRight, RefreshCw, AlertCircle, Link, Globe, Cookie, Sparkles
 } from 'lucide-react';
 import { Template, APP_COSTS } from '../types';
 import { generateVeoVideo, analyzeVideoFrames } from '../services/geminiService';
@@ -22,6 +22,8 @@ const MODELS = [
     { id: 'veo-3.1-generate-preview', label: 'Gemini 3 Pro', desc: 'High fidelity, detailed textures.' },
     { id: 'veo-3.1-generate-preview', label: 'Sora Turbo (Beta)', desc: 'Experimental motion adherence.' }, // Mapped to Veo for now
 ];
+
+const DEMO_VIDEO_URL = "https://cdn.coverr.co/videos/coverr-walking-in-a-city-at-night-4264/1080p.mp4";
 
 export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
     // State
@@ -49,12 +51,32 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            setSourceFile(file);
-            setTempStoragePath(null); // Local files don't need cloud cleanup
-            setExtractedFrames([]);
-            setAnalyzedPrompt('');
-            setFinalVideoUrl(null);
-            setErrorMsg('');
+            loadFile(file);
+        }
+    };
+
+    const loadFile = (file: File) => {
+        setSourceFile(file);
+        setTempStoragePath(null); // Local files don't need cloud cleanup
+        setExtractedFrames([]);
+        setAnalyzedPrompt('');
+        setFinalVideoUrl(null);
+        setErrorMsg('');
+    };
+
+    const handleLoadDemo = async () => {
+        setIsLoadingVideo(true);
+        setErrorMsg('');
+        try {
+            const response = await fetch(DEMO_VIDEO_URL);
+            if (!response.ok) throw new Error("Failed to fetch demo video");
+            const blob = await response.blob();
+            const file = new File([blob], "demo_night_city.mp4", { type: "video/mp4" });
+            loadFile(file);
+        } catch (e: any) {
+            setErrorMsg("Failed to load demo: " + e.message);
+        } finally {
+            setIsLoadingVideo(false);
         }
     };
 
@@ -96,19 +118,15 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
             if (!blob) throw new Error("Empty file downloaded.");
 
             const file = new File([blob], "downloaded_video.mp4", { type: blob.type || 'video/mp4' });
-            setSourceFile(file);
-            
-            setExtractedFrames([]);
-            setAnalyzedPrompt('');
-            setFinalVideoUrl(null);
+            loadFile(file);
 
         } catch (e: any) {
             console.error(e);
-            let msg = "Failed to download video. Please upload manually.";
+            let msg = "Failed to download video.";
             if (e.message.includes('Proxy Service Unavailable')) {
-                msg = "Video Proxy Service is not deployed. Please upload the video manually to bypass CORS.";
+                msg = "Video Proxy not deployed. Please use the Upload box or Demo button.";
             } else if (e.message.includes('CORS')) {
-                msg = "Browser Security Block (CORS): Please upload the video file manually.";
+                msg = "Browser blocked the download. Please upload manually.";
             }
             setErrorMsg(msg);
         } finally {
@@ -120,6 +138,7 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
         return new Promise((resolve, reject) => {
             const video = document.createElement('video');
             video.preload = 'metadata';
+            video.crossOrigin = 'anonymous'; // Important for CORS safety
             video.src = URL.createObjectURL(file);
             video.muted = true;
             video.playsInline = true;
@@ -243,7 +262,7 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
                             </div>
                             <div>
                                 <h2 className="text-xl font-bold">Source Video</h2>
-                                <p className="text-gray-400 text-xs">Enter a URL or upload a video to analyze.</p>
+                                <p className="text-gray-400 text-xs">Upload or link a video to clone its style.</p>
                             </div>
                         </div>
 
@@ -268,14 +287,6 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
                                     {isLoadingVideo ? <Loader2 className="animate-spin" /> : <ArrowRight />}
                                 </button>
                             </div>
-                            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setUseCookies(!useCookies)}>
-                                <div className={`w-4 h-4 rounded border flex items-center justify-center ${useCookies ? 'bg-indigo-600 border-indigo-600' : 'border-gray-600'}`}>
-                                    {useCookies && <CheckCircle size={10} className="text-white" />}
-                                </div>
-                                <span className="text-xs text-gray-500 flex items-center gap-1">
-                                    <Cookie size={10} /> Use Cookies / Credentials (Fixes some download blocks)
-                                </span>
-                            </div>
                         </div>
 
                         <div className="relative flex items-center justify-center mb-6">
@@ -287,7 +298,7 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
                         <div 
                             className={`border-2 border-dashed rounded-xl h-32 flex flex-col items-center justify-center cursor-pointer transition-all ${
                                 sourceFile ? 'border-indigo-500 bg-indigo-900/10' : 'border-gray-700 hover:border-gray-500 hover:bg-gray-800'
-                            }`}
+                            } ${errorMsg ? 'ring-2 ring-red-500/50' : ''}`}
                             onClick={() => fileInputRef.current?.click()}
                         >
                             <input 
@@ -313,11 +324,21 @@ export const TikTokClonerEditor: React.FC<TikTokClonerEditorProps> = ({ onBack, 
                             )}
                         </div>
 
+                         {/* Quick Actions */}
+                        <div className="mt-4 flex gap-2 justify-center">
+                            <button 
+                                onClick={handleLoadDemo}
+                                className="text-xs text-gray-500 hover:text-indigo-400 flex items-center gap-1 py-2 px-3 rounded-lg hover:bg-gray-800 transition-colors"
+                            >
+                                <Sparkles size={12} /> Load Demo Video
+                            </button>
+                        </div>
+
                         {/* Action Button */}
                         <button
                             onClick={handleAnalyze}
                             disabled={!sourceFile || isAnalyzing || isGenerating}
-                            className={`w-full mt-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
+                            className={`w-full mt-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${
                                 !sourceFile || isAnalyzing 
                                 ? 'bg-[#27272a] text-gray-500' 
                                 : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg'

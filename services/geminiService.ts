@@ -143,7 +143,7 @@ export const analyzeVideoFrames = async (frameDataUrls: string[]): Promise<strin
 
     // Prepare parts: Instructions + Images
     const parts: any[] = [
-        { text: "You are an expert video director. Analyze these 3 frames from a video (Start, Middle, End). Describe the visual style, camera movement, lighting, subject action, and atmosphere in a single, highly detailed prompt that could be used to generate a similar video. Focus on the visual aesthetics. Output ONLY the prompt." }
+        { text: "You are an expert cinematographer. Analyze these 3 frames from a video sequence. Ignore text overlays. Describe the visual style, lighting, camera angle, movement, main subject, and action in a single, highly detailed, photorealistic prompt suitable for a high-end video generation AI (like Sora or Veo). Focus purely on visual aesthetics. Output ONLY the prompt text, no intro." }
     ];
 
     for (const dataUrl of frameDataUrls) {
