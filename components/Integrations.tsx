@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { IntegrationStatus, ScheduledPost } from '../types';
-import { Twitter, Send, Calendar, Clock, X, LogOut, Linkedin, Instagram, Loader2, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Zap } from 'lucide-react';
+import { Twitter, Send, Calendar, Clock, LogOut, Linkedin, Instagram, Loader2, AlertCircle, ExternalLink, RefreshCw } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
 export const Integrations: React.FC = () => {
@@ -128,33 +128,65 @@ export const Integrations: React.FC = () => {
     const initiateConnection = async (platform: string) => {
         setIsLoading(true);
 
-        try {
-            // 1. Get current URL to return to after auth
-            const returnUrl = window.location.origin + window.location.pathname;
-            
-            // 2. Construct Edge Function URL
-            // We use the project ref from the Supabase client config
-            const supabaseUrl = (supabase as any).supabaseUrl || 'https://ysetjcltrfktdamldrnl.supabase.co';
-            
-            // Determine function name based on platform
-            let functionName = `auth-${platform}`;
-            if (platform === 'twitter') {
-                functionName = 'x_oauth_login';
-            }
-            
-            // Target: https://<project>.supabase.co/functions/v1/<functionName>
-            const authUrl = `${supabaseUrl}/functions/v1/${functionName}?redirect_url=${encodeURIComponent(returnUrl)}`;
-            
-            console.log(`Redirecting to Edge Function: ${authUrl}`);
-            
-            // 3. Redirect the browser
-            window.location.href = authUrl;
+        // Configuration
+        const PROJECT_REF = 'ysetjcltrfktdamldrnl';
+        let functionName = `auth-${platform}`;
+        if (platform === 'twitter') functionName = 'x_oauth_login';
+        
+        const returnUrl = window.location.origin + window.location.pathname;
 
-        } catch (e) {
-            console.error("Failed to initiate connection", e);
-            setIsLoading(false);
-            alert("Could not start connection flow. Please check console.");
+        try {
+            console.log(`Attempting secure invoke: ${functionName}`);
+
+            // ATTEMPT 1: Secure SDK Invoke
+            // This is the preferred method as it handles Authorization headers automatically.
+            const { data, error } = await supabase.functions.invoke(functionName, {
+                body: { redirect_url: returnUrl },
+                method: 'POST',
+            });
+
+            if (error) {
+                console.warn("Secure invoke returned error object:", error);
+                throw error; // Throw to trigger fallback
+            }
+
+            if (data?.url) {
+                window.location.href = data.url;
+            } else if (typeof data === 'string' && data.startsWith('http')) {
+                window.location.href = data;
+            } else {
+                throw new Error("No redirect URL returned from backend.");
+            }
+
+        } catch (invokeError: any) {
+            console.warn("Secure invocation failed. Attempting fallback redirect...", invokeError);
+            
+            // ATTEMPT 2: Direct Browser Redirect (Fallback)
+            // If CORS or network blocks the fetch, we manually construct the URL and redirect.
+            try {
+                const { data: { session } } = await supabase.auth.getSession();
+                const token = session?.access_token;
+                
+                const fallbackUrl = new URL(`https://${PROJECT_REF}.supabase.co/functions/v1/${functionName}`);
+                fallbackUrl.searchParams.set('redirect_url', returnUrl);
+                
+                // We pass the token in the URL so the Edge Function can still identify the user
+                // The Edge Function must be updated to check 'token' query param if 'Authorization' header is missing.
+                if (token) {
+                    fallbackUrl.searchParams.set('token', token);
+                    fallbackUrl.searchParams.set('access_token', token);
+                }
+
+                console.log("Redirecting to fallback:", fallbackUrl.toString());
+                window.location.href = fallbackUrl.toString();
+
+            } catch (fallbackError: any) {
+                console.error("Critical Failure:", fallbackError);
+                alert(`Connection failed: ${invokeError.message || "Unknown error"}`);
+                setIsLoading(false);
+            }
         }
+        // Note: We don't set isLoading(false) on success because the page will redirect away.
     };
 
     const handleDisconnect = async (platform: string) => {
@@ -229,7 +261,6 @@ export const Integrations: React.FC = () => {
     };
 
     const connectedCount = integrations.filter(i => i.connected).length;
-    const activePlatform = integrations.find(i => i.id === selectedPlatform);
 
     // Colors helper
     const getPlatformColor = (id: string) => {
