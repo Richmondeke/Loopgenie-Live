@@ -229,18 +229,26 @@ export const stitchVideoFrames = async (
         
         const combinedStream = new MediaStream(combinedTracks);
         
+        // Prioritize MP4 if supported by the browser (e.g. Safari, modern Chrome)
         const mimeTypes = [
+            'video/mp4',
+            'video/webm;codecs=h264',
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
             'video/webm',
             'video/mp4' 
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-
-        const recorder = new MediaRecorder(combinedStream, {
-            mimeType: selectedMime,
+        
+        // Ensure we pass a mimeType if one is found
+        const options: MediaRecorderOptions = {
             videoBitsPerSecond: 3500000 // 3.5 Mbps
-        });
+        };
+        if (selectedMime) {
+            options.mimeType = selectedMime;
+        }
+
+        const recorder = new MediaRecorder(combinedStream, options);
 
         const chunks: Blob[] = [];
         recorder.ondataavailable = (e) => {
@@ -249,7 +257,9 @@ export const stitchVideoFrames = async (
 
         recorder.onstop = () => {
             clearTimeout(timeoutId);
-            const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
+            // Default to selectedMime or mp4/webm fallback
+            const finalType = selectedMime || 'video/webm';
+            const blob = new Blob(chunks, { type: finalType });
             const url = URL.createObjectURL(blob);
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
             resolve(url);

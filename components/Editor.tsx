@@ -5,6 +5,7 @@ import { Template, HeyGenAvatar, HeyGenVoice, ProjectStatus, APP_COSTS } from '.
 import { generateScriptContent, generateVeoVideo, generateVeoProductVideo, generateVeoImageToVideo, generateSpeech, generateProductShotPrompts, generateFashionImage } from '../services/geminiService';
 import { getAvatars, getVoices, generateVideo, checkVideoStatus } from '../services/heygenService';
 import { ShortMakerEditor } from './ShortMakerEditor';
+import { TikTokClonerEditor } from './TikTokClonerEditor';
 import { cropVideo, concatenateVideos, mergeVideoAudio, stitchVideoFrames } from '../services/ffmpegService';
 import { uploadToStorage } from '../services/storageService';
 
@@ -643,7 +644,8 @@ const FashionShootEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {
 export const Editor: React.FC<EditorProps> = (props) => {
     const { template, onBack } = props;
     let content;
-    if (template.mode === 'TEXT_TO_VIDEO') content = <TextToVideoEditor {...props} />;
+    if (template.mode === 'TIKTOK_CLONER') content = <TikTokClonerEditor {...props} />;
+    else if (template.mode === 'TEXT_TO_VIDEO') content = <TextToVideoEditor {...props} />;
     else if (template.mode === 'UGC_PRODUCT') content = <ProductUGCEditor {...props} />;
     else if (template.mode === 'FASHION_SHOOT') content = <FashionShootEditor {...props} />;
     else if (template.mode === 'SHORTS') content = <ShortMakerEditor {...props} />;

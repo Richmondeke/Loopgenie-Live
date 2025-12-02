@@ -132,9 +132,97 @@ export const generateSpeech = async (text: string, voiceName: string = 'Kore'): 
   }
 };
 
-// ... generateFashionImage & generateVeoVideo ... (omitted, unchanged)
+/**
+ * Analyzes video frames to reverse-engineer a prompt.
+ * @param frameDataUrls Array of base64 image strings from the video
+ */
+export const analyzeVideoFrames = async (frameDataUrls: string[]): Promise<string> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Prepare parts: Instructions + Images
+    const parts: any[] = [
+        { text: "You are an expert video director. Analyze these 3 frames from a video (Start, Middle, End). Describe the visual style, camera movement, lighting, subject action, and atmosphere in a single, highly detailed prompt that could be used to generate a similar video. Focus on the visual aesthetics. Output ONLY the prompt." }
+    ];
+
+    for (const dataUrl of frameDataUrls) {
+        const base64 = dataUrl.split(',')[1];
+        const mimeType = dataUrl.split(';')[0].split(':')[1];
+        parts.push({
+            inlineData: {
+                mimeType: mimeType,
+                data: base64
+            }
+        });
+    }
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash", // Flash is great for multi-modal vision
+            contents: { parts: parts }
+        });
+
+        return response.text || "A cinematic video of...";
+    } catch (error) {
+        console.error("Frame analysis failed:", error);
+        throw new Error("Failed to analyze video frames.");
+    }
+};
+
+export const generateVeoVideo = async (prompt: string, config: { aspectRatio: string }, model: string = 'veo-3.1-fast-generate-preview'): Promise<string> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Ensure valid ratio for Veo
+    let ratio = config.aspectRatio || '16:9';
+    if (ratio !== '16:9' && ratio !== '9:16') ratio = '16:9'; // Fallback as Veo is strict
+
+    console.log(`Generating Veo Video with model: ${model}, ratio: ${ratio}, prompt: ${prompt.substring(0, 50)}...`);
+
+    try {
+        let operation = await ai.models.generateVideos({
+            model: model,
+            prompt: prompt,
+            config: {
+                numberOfVideos: 1,
+                resolution: '720p',
+                aspectRatio: ratio 
+            }
+        });
+
+        // Poll for completion
+        let pollingAttempts = 0;
+        while (!operation.done && pollingAttempts < 60) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            operation = await ai.operations.getVideosOperation({ operation: operation });
+            pollingAttempts++;
+            console.log("Veo Polling...", pollingAttempts);
+        }
+
+        if (!operation.done) throw new Error("Video generation timed out.");
+
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!videoUri) throw new Error("No video URI returned.");
+
+        // Fetch the actual bytes to avoid expiring links and need for API Key in URL
+        const downloadUrl = `${videoUri}&key=${apiKey}`;
+        const res = await fetch(downloadUrl);
+        if(!res.ok) throw new Error("Failed to download generated video bytes.");
+        
+        const blob = await res.blob();
+        return URL.createObjectURL(blob);
+
+    } catch (error: any) {
+        console.error("Veo Generation Error:", error);
+        if (error.status === 429) throw new Error("Veo API quota exceeded.");
+        throw error;
+    }
+};
+
+// ... generateFashionImage & other mocks ... (omitted, unchanged)
 export const generateFashionImage = async (merch: string, set: string, mod: string): Promise<string> => { return ""; }
-export const generateVeoVideo = async (p: string, a: any, m: string): Promise<string> => { return ""; }
 export const generateVeoImageToVideo = async (p: string, i: string): Promise<string> => { return ""; }
 export const generateVeoProductVideo = async (p: string, i: string[], r: any): Promise<string> => { return ""; }
 export const generateProductShotPrompts = async (i: string, u: string): Promise<string[]> => { return []; }

@@ -254,7 +254,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 try {
                     const permanentVideoUrl = await uploadToStorage(
                         finalVideoUrl, 
-                        `${isStorybook ? 'story' : 'short'}_${Date.now()}.webm`, 
+                        `${isStorybook ? 'story' : 'short'}_${Date.now()}.mp4`, 
                         'stories'
                     );
                     
@@ -571,7 +571,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 <video src={videoUrl} controls autoPlay className="w-full h-full object-contain bg-black" />
                              </div>
                              <div className="flex justify-center mt-8 gap-4">
-                                <a href={videoUrl} download={`story-${Date.now()}.webm`} className="bg-gray-800 hover:bg-gray-700 text-white px-8 py-3 rounded-full font-bold flex items-center gap-2 shadow-lg transition-all"><Download size={20} /> Download</a>
+                                <a href={videoUrl} download={`${isStorybook ? 'story' : 'short'}-${Date.now()}.mp4`} className="bg-gray-800 hover:bg-gray-700 text-white px-8 py-3 rounded-full font-bold flex items-center gap-2 shadow-lg transition-all"><Download size={20} /> Download</a>
                                 {isSaved && <div className="bg-green-600/20 text-green-400 border border-green-600/50 px-8 py-3 rounded-full font-bold flex items-center gap-2"><CheckCircle size={20} /> Saved</div>}
                              </div>
                         </div>

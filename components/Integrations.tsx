@@ -39,7 +39,7 @@ export const Integrations: React.FC = () => {
         if (error) {
             alert(`Connection failed: ${error}`);
             // Clean URL
-            window.history.replaceState({}, '', window.location.pathname);
+            cleanUrl();
             return;
         }
 
@@ -53,7 +53,6 @@ export const Integrations: React.FC = () => {
                     const handle = mockUsername.startsWith('@') ? mockUsername : `@${mockUsername}`;
 
                     // Persist connection to ensure UI state is synced
-                    // Even if Edge Function saves it, this double-check ensures the frontend has the record immediately.
                     const { error } = await supabase
                         .from('social_integrations')
                         .upsert({
@@ -67,7 +66,7 @@ export const Integrations: React.FC = () => {
                     if (error) throw error;
 
                     // Clean URL to prevent re-processing on refresh
-                    window.history.replaceState({}, '', window.location.pathname);
+                    cleanUrl();
                     
                     // Force refresh data
                     await fetchData();
@@ -78,6 +77,11 @@ export const Integrations: React.FC = () => {
                 setIsProcessingCallback(false);
             }
         }
+    };
+
+    const cleanUrl = () => {
+        const url = new URL(window.location.href);
+        window.history.replaceState({}, '', url.pathname);
     };
 
     const fetchData = async () => {
@@ -128,27 +132,23 @@ export const Integrations: React.FC = () => {
     const initiateConnection = async (platform: string) => {
         setIsLoading(true);
 
-        // Configuration
         const PROJECT_REF = 'ysetjcltrfktdamldrnl';
         let functionName = `auth-${platform}`;
         if (platform === 'twitter') functionName = 'x_oauth_login';
         
-        const returnUrl = window.location.origin + window.location.pathname;
+        // Robust URL construction to avoid duplication bugs
+        const returnUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
 
         try {
-            console.log(`Attempting secure invoke: ${functionName}`);
+            console.log(`Initiating connection for ${platform} to ${functionName}`);
 
             // ATTEMPT 1: Secure SDK Invoke
-            // This is the preferred method as it handles Authorization headers automatically.
             const { data, error } = await supabase.functions.invoke(functionName, {
                 body: { redirect_url: returnUrl },
                 method: 'POST',
             });
 
-            if (error) {
-                console.warn("Secure invoke returned error object:", error);
-                throw error; // Throw to trigger fallback
-            }
+            if (error) throw error;
 
             if (data?.url) {
                 window.location.href = data.url;
@@ -159,25 +159,24 @@ export const Integrations: React.FC = () => {
             }
 
         } catch (invokeError: any) {
-            console.warn("Secure invocation failed. Attempting fallback redirect...", invokeError);
+            console.warn("Invoke failed, switching to Fallback Redirect:", invokeError.message);
             
             // ATTEMPT 2: Direct Browser Redirect (Fallback)
-            // If CORS or network blocks the fetch, we manually construct the URL and redirect.
             try {
                 const { data: { session } } = await supabase.auth.getSession();
                 const token = session?.access_token;
                 
                 const fallbackUrl = new URL(`https://${PROJECT_REF}.supabase.co/functions/v1/${functionName}`);
+                
+                // Add essential parameters
                 fallbackUrl.searchParams.set('redirect_url', returnUrl);
                 
-                // We pass the token in the URL so the Edge Function can still identify the user
-                // The Edge Function must be updated to check 'token' query param if 'Authorization' header is missing.
+                // Pass token for authentication since Authorization header can't be set on window.location
                 if (token) {
                     fallbackUrl.searchParams.set('token', token);
-                    fallbackUrl.searchParams.set('access_token', token);
                 }
 
-                console.log("Redirecting to fallback:", fallbackUrl.toString());
+                console.log("Redirecting to:", fallbackUrl.toString());
                 window.location.href = fallbackUrl.toString();
 
             } catch (fallbackError: any) {
@@ -186,7 +185,6 @@ export const Integrations: React.FC = () => {
                 setIsLoading(false);
             }
         }
-        // Note: We don't set isLoading(false) on success because the page will redirect away.
     };
 
     const handleDisconnect = async (platform: string) => {
@@ -262,7 +260,6 @@ export const Integrations: React.FC = () => {
 
     const connectedCount = integrations.filter(i => i.connected).length;
 
-    // Colors helper
     const getPlatformColor = (id: string) => {
         if (id === 'twitter') return 'bg-black text-white border-gray-700';
         if (id === 'linkedin') return 'bg-[#0077b5] text-white border-transparent';

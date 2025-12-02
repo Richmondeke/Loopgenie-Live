@@ -15,6 +15,7 @@ const mapRowToProject = (row: any): Project => {
     else if (idStr.startsWith('imgv_')) pType = 'IMAGE_TO_VIDEO';
     else if (idStr.startsWith('txtv_')) pType = 'TEXT_TO_VIDEO';
     else if (idStr.startsWith('fash_')) pType = 'FASHION_SHOOT';
+    else if (row.template_name === 'Viral Clone') pType = 'TIKTOK_CLONER'; // Fallback
     else pType = 'AVATAR';
   }
 
@@ -40,7 +41,7 @@ const mapRowToProject = (row: any): Project => {
     videoUrl: row.video_url,
     error: row.error,
     createdAt: createdAt,
-    type: pType as 'AVATAR' | 'UGC_PRODUCT' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_VIDEO',
+    type: pType as 'AVATAR' | 'UGC_PRODUCT' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_VIDEO' | 'TIKTOK_CLONER',
     cost: row.cost || 1, 
     user_email: row.user_email
   };
