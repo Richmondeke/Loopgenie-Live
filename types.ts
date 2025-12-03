@@ -1,5 +1,6 @@
 
 
+
 export enum AppView {
   TEMPLATES = 'TEMPLATES',
   PROJECTS = 'PROJECTS',
@@ -111,6 +112,7 @@ export interface ShortMakerScene {
   transition_to_next: string;
   timecodes: ShortMakerTimecodes;
   generated_image_url?: string;
+  generated_video_url?: string; // NEW: For Veo shorts
   generated_image_seed?: string;
 }
 
@@ -126,6 +128,14 @@ export interface ShortMakerManifest {
   generated_audio_url?: string;
   generated_video_url?: string;
   status?: "created" | "story_ready" | "images_processing" | "audio_processing" | "assembling" | "completed" | "failed";
+}
+
+// --- Fashion Types ---
+export interface FashionStyle {
+    id: string;
+    label: string;
+    desc: string;
+    img: string;
 }
 
 // --- Social Integration Types ---

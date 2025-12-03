@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
-import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
+import { generateStory, generateSceneImage, generateSceneVideo, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
 
@@ -73,9 +73,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     // Cost Calc
     const getCost = (d: DurationTier) => {
-        if(d === '15s') return APP_COSTS.SHORTS_15S;
-        if(d === '30s') return APP_COSTS.SHORTS_30S;
-        return APP_COSTS.SHORTS_60S;
+        // Storybook uses Images (Cheap)
+        if (isStorybook) {
+             if(d === '15s') return APP_COSTS.SHORTS_15S;
+             if(d === '30s') return APP_COSTS.SHORTS_30S;
+             return APP_COSTS.SHORTS_60S;
+        } 
+        // Shorts uses Veo Videos (Expensive)
+        // Approx 8 credits per Veo call.
+        // 15s = ~3 scenes * 8 = 24
+        // 30s = ~5 scenes * 8 = 40
+        // 60s = ~8 scenes * 8 = 64
+        if(d === '15s') return 24;
+        if(d === '30s') return 40;
+        return 64;
     };
     const COST = getCost(duration);
 
@@ -175,67 +186,92 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             if (!currentManifest) throw new Error("Failed to initialize story.");
 
-            // STEP 2: VISUALS
+            // STEP 2: VISUALS (IMAGES OR VIDEO)
             setStep('VISUALS');
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
-            const alreadyDoneCount = workingScenes.filter(s => !!s.generated_image_url).length;
+            
+            // Check progress
+            const alreadyDoneCount = workingScenes.filter(s => isStorybook ? !!s.generated_image_url : !!s.generated_video_url).length;
             setCompletedImages(alreadyDoneCount);
 
             if (alreadyDoneCount < workingScenes.length) {
-                addLog(`🎨 Generating visuals (${alreadyDoneCount}/${workingScenes.length} done)...`);
+                addLog(isStorybook 
+                    ? `🎨 Painting illustrations (${alreadyDoneCount}/${workingScenes.length})...`
+                    : `🎥 Filming scenes with Veo (${alreadyDoneCount}/${workingScenes.length})...`
+                );
             }
 
             for (let i = 0; i < workingScenes.length; i++) {
-                if (workingScenes[i].generated_image_url) continue;
+                // Skip if done
+                if (isStorybook && workingScenes[i].generated_image_url) continue;
+                if (!isStorybook && workingScenes[i].generated_video_url) continue;
 
-                addLog(`Painting Scene ${i + 1}...`);
+                addLog(isStorybook ? `Painting Scene ${i + 1}...` : `Filming Scene ${i + 1} (This takes ~15s)...`);
+                
                 let url = '';
                 let attempts = 0;
                 while (!url && attempts < 3) {
                     try {
-                        url = await generateSceneImage(
-                            workingScenes[i],
-                            generationSeed,
-                            style,
-                            aspectRatio,
-                            visualModel 
-                        );
-                        workingScenes[i].generated_image_url = url;
+                        if (isStorybook) {
+                            // IMAGE GEN
+                            url = await generateSceneImage(
+                                workingScenes[i],
+                                generationSeed,
+                                style,
+                                aspectRatio,
+                                visualModel 
+                            );
+                            workingScenes[i].generated_image_url = url;
+                        } else {
+                            // VIDEO GEN (VEO)
+                            url = await generateSceneVideo(
+                                workingScenes[i],
+                                style,
+                                aspectRatio
+                            );
+                            workingScenes[i].generated_video_url = url;
+                        }
+                        
                         setManifest({ ...currentManifest, scenes: [...workingScenes] });
                         setCompletedImages(prev => prev + 1);
                     } catch (err) {
                         attempts++;
+                        console.warn(`Retry ${attempts} for Scene ${i+1}`);
+                        if (attempts >= 3) throw err;
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
-                if (!url) throw new Error(`Failed to generate image for Scene ${i+1}`);
             }
             
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
 
             // STEP 3: AUDIO
-            setStep('AUDIO');
-            let generatedAudioUrl = currentManifest.generated_audio_url || '';
+            // Note: For Shorts, Audio is generated during Assembly to match clips. 
+            // For Storybook, we generate full audio now.
+            if (isStorybook) {
+                setStep('AUDIO');
+                let generatedAudioUrl = currentManifest.generated_audio_url || '';
 
-            if (!generatedAudioUrl) {
-                addLog(`🎙️ Recording voiceover (${selectedVoice})...`);
-                const elevenKey = localStorage.getItem('genavatar_eleven_key');
-                try {
-                    const audioRes = await synthesizeAudio(
-                        currentManifest, 
-                        elevenKey || undefined, 
-                        selectedVoice 
-                    );
-                    generatedAudioUrl = audioRes.audioUrl;
-                    addLog(`✅ Audio recording complete.`);
-                } catch (err) {
-                    console.warn(err);
-                    addLog("⚠️ Audio issues, attempting fallback...");
+                if (!generatedAudioUrl) {
+                    addLog(`🎙️ Recording voiceover (${selectedVoice})...`);
+                    const elevenKey = localStorage.getItem('genavatar_eleven_key');
+                    try {
+                        const audioRes = await synthesizeAudio(
+                            currentManifest, 
+                            elevenKey || undefined, 
+                            selectedVoice 
+                        );
+                        generatedAudioUrl = audioRes.audioUrl;
+                        addLog(`✅ Audio recording complete.`);
+                    } catch (err) {
+                        console.warn(err);
+                        addLog("⚠️ Audio issues, attempting fallback...");
+                    }
+                    currentManifest = { ...currentManifest, generated_audio_url: generatedAudioUrl };
+                    setManifest(currentManifest);
                 }
-                currentManifest = { ...currentManifest, generated_audio_url: generatedAudioUrl };
-                setManifest(currentManifest);
             }
 
             // STEP 4: ASSEMBLY
@@ -243,8 +279,17 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             if (resume && videoUrl) {
                  addLog("⏩ Video already built.");
             } else {
-                addLog("🎬 Stitching video & mixing background music...");
-                const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
+                addLog(isStorybook 
+                    ? "🎬 Stitching storyboard & mixing music..." 
+                    : "🎬 Editing video timeline & syncing audio..."
+                );
+                
+                const finalVideoUrl = await assembleVideo(
+                    currentManifest, 
+                    bgMusic || undefined,
+                    isStorybook ? 'STORYBOOK' : 'SHORTS'
+                );
+                
                 setVideoUrl(finalVideoUrl);
                 addLog("✅ Production Complete!");
                 
@@ -258,16 +303,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         'stories'
                     );
                     
-                    // Try saving thumb
+                    // Try saving thumb (Image from scene 1 or screenshot)
+                    // For Shorts (Video), we might not have an image URL, just video. 
+                    // Fallback to placeholder if needed or extract frame (not implemented here for speed)
                     let thumbUrl = currentManifest.scenes[0].generated_image_url;
-                    try {
-                        if (thumbUrl) thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
-                    } catch(e) {}
-
+                    
                     await onGenerate({
                         isDirectSave: true,
                         videoUrl: permanentVideoUrl, 
-                        thumbnailUrl: thumbUrl,
+                        thumbnailUrl: thumbUrl || 'https://via.placeholder.com/640x360?text=Short+Video',
                         cost: COST,
                         templateName: currentManifest.title,
                         type: isStorybook ? 'STORYBOOK' : 'SHORTS',
@@ -367,18 +411,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Visual Model</label>
-                                    <select 
-                                        value={visualModel}
-                                        onChange={(e) => setVisualModel(e.target.value as VisualModel)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
-                                    >
-                                        <option value="nano_banana">Nano Banana (Default, Fast)</option>
-                                        <option value="flux">Flux (Artistic)</option>
-                                        <option value="gemini_pro">Gemini 3 Pro (High Quality)</option>
-                                    </select>
-                                </div>
-                                <div>
                                     <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Duration</label>
                                     <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700">
                                         {(['15s', '30s', '60s'] as DurationTier[]).map(t => (
@@ -396,6 +428,26 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         ))}
                                     </div>
                                 </div>
+                                {isStorybook ? (
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Model</label>
+                                        <select 
+                                            value={visualModel}
+                                            onChange={(e) => setVisualModel(e.target.value as VisualModel)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
+                                        >
+                                            <option value="nano_banana">Nano Banana (Fast)</option>
+                                            <option value="flux">Flux (Artistic)</option>
+                                            <option value="gemini_pro">Gemini 3 Pro</option>
+                                        </select>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col justify-end pb-2">
+                                        <div className="text-xs text-purple-400 font-bold flex items-center gap-1">
+                                            <Video size={12} /> Powered by Veo 3
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                             
                             <div>
@@ -517,7 +569,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                     }`}
                                 >
                                     <Wand2 size={18} />
-                                    <span>Generate Video</span>
+                                    <span>{isStorybook ? 'Generate Story' : 'Generate Short (Veo)'}</span>
                                 </button>
                             </div>
                         </div>
@@ -581,18 +633,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 <h4 className="text-gray-400 text-sm font-bold uppercase tracking-wider flex items-center gap-2">
                                     <Layout size={14} /> Live Storyboard
                                 </h4>
-                                {manifest?.generated_audio_url && step !== 'COMPLETE' && <div className="flex items-center gap-2 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded"><Volume2 size={12} /> Voiceover Ready</div>}
+                                {manifest?.generated_audio_url && step !== 'COMPLETE' && isStorybook && <div className="flex items-center gap-2 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded"><Volume2 size={12} /> Voiceover Ready</div>}
                             </div>
                             <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4`}>
                                 {manifest ? manifest.scenes.map((scene, idx) => (
-                                    <div key={idx} className={`bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col transition-all duration-500 ${scene.generated_image_url ? 'opacity-100 ring-1 ring-gray-700' : 'opacity-50 scale-95'}`}>
+                                    <div key={idx} className={`bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col transition-all duration-500 ${scene.generated_image_url || scene.generated_video_url ? 'opacity-100 ring-1 ring-gray-700' : 'opacity-50 scale-95'}`}>
                                         <div className="bg-black relative group" style={{ aspectRatio: aspectRatio.replace(':', '/') }}>
-                                            {scene.generated_image_url ? (
+                                            {scene.generated_video_url && !isStorybook ? (
+                                                <video src={scene.generated_video_url} className="w-full h-full object-cover" autoPlay loop muted />
+                                            ) : scene.generated_image_url ? (
                                                 <img src={scene.generated_image_url} alt={`Scene ${idx+1}`} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                             ) : (
                                                 <div className="w-full h-full flex flex-col items-center justify-center p-4">
                                                     {isProcessing && step === 'VISUALS' && completedImages === idx ? <Loader2 className="animate-spin text-blue-500 mb-2" /> : <ImageIcon className="text-gray-700 mb-2" />}
-                                                    <span className="text-xs text-gray-600 text-center">{step === 'VISUALS' && completedImages === idx ? 'Painting...' : 'Pending'}</span>
+                                                    <span className="text-xs text-gray-600 text-center">{step === 'VISUALS' && completedImages === idx ? (isStorybook ? 'Painting...' : 'Filming...') : 'Pending'}</span>
                                                 </div>
                                             )}
                                             <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] font-mono text-white">Scene {idx + 1}</div>

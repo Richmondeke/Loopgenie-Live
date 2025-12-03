@@ -181,8 +181,10 @@ export const generateVeoVideo = async (prompt: string, config: { aspectRatio: st
 
     console.log(`Generating Veo Video with model: ${model}, ratio: ${ratio}, prompt: ${prompt.substring(0, 50)}...`);
 
+    let operation;
+
     try {
-        let operation = await ai.models.generateVideos({
+        operation = await ai.models.generateVideos({
             model: model,
             prompt: prompt,
             config: {
@@ -191,7 +193,31 @@ export const generateVeoVideo = async (prompt: string, config: { aspectRatio: st
                 aspectRatio: ratio 
             }
         });
+    } catch (error: any) {
+        console.warn(`Primary Veo model ${model} failed:`, error.message);
+        
+        // Check for 404 (Model not found)
+        if (error.status === 404 || (error.message && error.message.includes('404')) || (error.message && error.message.includes('NOT_FOUND'))) {
+            const fallbackModel = 'veo-2.0-generate-preview';
+            console.log(`Attempting fallback to ${fallbackModel}...`);
+            try {
+                operation = await ai.models.generateVideos({
+                    model: fallbackModel,
+                    prompt: prompt,
+                    // Older model might not support specific config, so we try simple request
+                });
+            } catch (fallbackError: any) {
+                console.error("Fallback Veo model also failed:", fallbackError);
+                throw new Error(`Veo models unavailable (404). Ensure your API Key has access to 'veo-3.1-fast-generate-preview' or 'veo-2.0-generate-preview'. Original error: ${error.message}`);
+            }
+        } else {
+            throw error;
+        }
+    }
 
+    if (!operation) throw new Error("Video generation operation failed to initialize.");
+
+    try {
         // Poll for completion
         let pollingAttempts = 0;
         while (!operation.done && pollingAttempts < 60) {
@@ -215,14 +241,92 @@ export const generateVeoVideo = async (prompt: string, config: { aspectRatio: st
         return URL.createObjectURL(blob);
 
     } catch (error: any) {
-        console.error("Veo Generation Error:", error);
+        console.error("Veo Polling Error:", error);
         if (error.status === 429) throw new Error("Veo API quota exceeded.");
         throw error;
     }
 };
 
-// ... generateFashionImage & other mocks ... (omitted, unchanged)
-export const generateFashionImage = async (merch: string, set: string, mod: string): Promise<string> => { return ""; }
+/**
+ * Analyzes a single product image to generate a detailed prompt for virtual photoshoots.
+ */
+export const analyzeProductImage = async (file: File): Promise<string> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Convert file to base64
+    const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const res = reader.result as string;
+            resolve(res.split(',')[1]);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+    const prompt = "Analyze this product image. Describe the product itself in extreme detail (colors, materials, shape, branding, distinctive features) so that an AI can recreate it. Do not describe the background. Output ONLY the description.";
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: {
+                parts: [
+                    { text: prompt },
+                    { inlineData: { mimeType: file.type, data: base64 } }
+                ]
+            }
+        });
+        return response.text || "A product.";
+    } catch (error: any) {
+        console.error("Product analysis failed:", error);
+        throw new Error("Failed to analyze product image.");
+    }
+};
+
+/**
+ * Generates fashion/product images using Gemini Imagen.
+ */
+export const generateFashionAssets = async (
+    description: string, 
+    style: string, 
+    quantity: number = 1
+): Promise<string[]> => {
+    const apiKey = getApiKey();
+    if (!apiKey) throw new Error("Gemini API Key is missing.");
+    const ai = new GoogleGenAI({ apiKey });
+
+    const fullPrompt = `Professional fashion product photography. Style: ${style}. ${description}. High resolution, 4k, photorealistic, cinematic lighting, trending on artstation, masterpiece.`;
+
+    const results: string[] = [];
+
+    // Parallel requests for batching (since API is usually 1 per req or strict limits)
+    // We limit concurrency to 2 to avoid rate limits on free tier
+    const promises = Array.from({ length: quantity }).map(async () => {
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image', // or 'gemini-3-pro-image-preview' if access enabled
+                contents: { parts: [{ text: fullPrompt }] },
+                config: { imageConfig: { aspectRatio: '3:4' } } // Portrait for fashion usually
+            });
+            
+            const part = response.candidates?.[0]?.content?.parts?.[0];
+            if (part && part.inlineData) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+            return null;
+        } catch (e) {
+            console.warn("Single image gen failed:", e);
+            return null;
+        }
+    });
+
+    const generated = await Promise.all(promises);
+    return generated.filter((img): img is string => !!img);
+};
+
 export const generateVeoImageToVideo = async (p: string, i: string): Promise<string> => { return ""; }
 export const generateVeoProductVideo = async (p: string, i: string[], r: any): Promise<string> => { return ""; }
 export const generateProductShotPrompts = async (i: string, u: string): Promise<string[]> => { return []; }
+export const generateFashionImage = async (merch: string, set: string, mod: string): Promise<string> => { return ""; }

@@ -6,6 +6,7 @@ import { generateScriptContent, generateVeoVideo, generateVeoProductVideo, gener
 import { getAvatars, getVoices, generateVideo, checkVideoStatus } from '../services/heygenService';
 import { ShortMakerEditor } from './ShortMakerEditor';
 import { TikTokClonerEditor } from './TikTokClonerEditor';
+import { FashionShootEditor } from './FashionShootEditor';
 import { cropVideo, concatenateVideos, mergeVideoAudio, stitchVideoFrames } from '../services/ffmpegService';
 import { uploadToStorage } from '../services/storageService';
 
@@ -639,7 +640,6 @@ const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) =>
 // ... TextToVideoEditor, ImageToVideoEditor, FashionShootEditor follow similar patterns ...
 const TextToVideoEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {...props} />; // Placeholder for brevity
 const ImageToVideoEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {...props} />;
-const FashionShootEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {...props} />;
 
 export const Editor: React.FC<EditorProps> = (props) => {
     const { template, onBack } = props;
