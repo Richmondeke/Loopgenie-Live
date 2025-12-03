@@ -39,7 +39,7 @@ export const Integrations: React.FC = () => {
         if (error) {
             alert(`Connection failed: ${error}`);
             // Clean URL
-            cleanUrl();
+            window.history.replaceState({}, '', window.location.pathname);
             return;
         }
 
@@ -53,6 +53,7 @@ export const Integrations: React.FC = () => {
                     const handle = mockUsername.startsWith('@') ? mockUsername : `@${mockUsername}`;
 
                     // Persist connection to ensure UI state is synced
+                    // Even if Edge Function saves it, this double-check ensures the frontend has the record immediately.
                     const { error } = await supabase
                         .from('social_integrations')
                         .upsert({
@@ -66,7 +67,7 @@ export const Integrations: React.FC = () => {
                     if (error) throw error;
 
                     // Clean URL to prevent re-processing on refresh
-                    cleanUrl();
+                    window.history.replaceState({}, '', window.location.pathname);
                     
                     // Force refresh data
                     await fetchData();
@@ -77,11 +78,6 @@ export const Integrations: React.FC = () => {
                 setIsProcessingCallback(false);
             }
         }
-    };
-
-    const cleanUrl = () => {
-        const url = new URL(window.location.href);
-        window.history.replaceState({}, '', url.pathname);
     };
 
     const fetchData = async () => {
@@ -132,58 +128,49 @@ export const Integrations: React.FC = () => {
     const initiateConnection = async (platform: string) => {
         setIsLoading(true);
 
-        const PROJECT_REF = 'ysetjcltrfktdamldrnl';
-        let functionName = `auth-${platform}`;
-        if (platform === 'twitter') functionName = 'x_oauth_login';
-        
-        // Robust URL construction to avoid duplication bugs
-        const returnUrl = window.location.protocol + '//' + window.location.host + window.location.pathname;
-
         try {
-            console.log(`Initiating connection for ${platform} to ${functionName}`);
-
-            // ATTEMPT 1: Secure SDK Invoke
+            // 1. Get current URL to return to after auth
+            const returnUrl = window.location.origin + window.location.pathname;
+            
+            // 2. Determine function name based on platform
+            let functionName = `auth-${platform}`;
+            if (platform === 'twitter') {
+                functionName = 'x_oauth_login';
+            }
+            
+            console.log(`Invoking Edge Function: ${functionName} with redirect: ${returnUrl}`);
+            
+            // 3. Invoke Function Securely (Supabase attaches Auth Header automatically)
+            // We pass the redirect_url in the body.
             const { data, error } = await supabase.functions.invoke(functionName, {
                 body: { redirect_url: returnUrl },
-                method: 'POST',
+                method: 'POST', // Assuming function accepts POST. 
             });
 
-            if (error) throw error;
+            if (error) {
+                console.error("Invoke Error Object:", error);
+                throw new Error(error.message || "Edge Function invocation failed");
+            }
 
+            console.log("Edge Function Response:", data);
+
+            // 4. Handle Redirect
             if (data?.url) {
+                // The function returned a JSON object with the auth URL
                 window.location.href = data.url;
             } else if (typeof data === 'string' && data.startsWith('http')) {
+                // The function returned the raw URL string
                 window.location.href = data;
             } else {
-                throw new Error("No redirect URL returned from backend.");
+                console.warn("Unexpected response format:", data);
+                alert("Received unexpected response from authentication server. Please check console.");
             }
 
-        } catch (invokeError: any) {
-            console.warn("Invoke failed, switching to Fallback Redirect:", invokeError.message);
-            
-            // ATTEMPT 2: Direct Browser Redirect (Fallback)
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                const token = session?.access_token;
-                
-                const fallbackUrl = new URL(`https://${PROJECT_REF}.supabase.co/functions/v1/${functionName}`);
-                
-                // Add essential parameters
-                fallbackUrl.searchParams.set('redirect_url', returnUrl);
-                
-                // Pass token for authentication since Authorization header can't be set on window.location
-                if (token) {
-                    fallbackUrl.searchParams.set('token', token);
-                }
-
-                console.log("Redirecting to:", fallbackUrl.toString());
-                window.location.href = fallbackUrl.toString();
-
-            } catch (fallbackError: any) {
-                console.error("Critical Failure:", fallbackError);
-                alert(`Connection failed: ${invokeError.message || "Unknown error"}`);
-                setIsLoading(false);
-            }
+        } catch (e: any) {
+            console.error("Failed to initiate connection", e);
+            alert(`Connection Error: ${e.message}`);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -260,6 +247,7 @@ export const Integrations: React.FC = () => {
 
     const connectedCount = integrations.filter(i => i.connected).length;
 
+    // Colors helper
     const getPlatformColor = (id: string) => {
         if (id === 'twitter') return 'bg-black text-white border-gray-700';
         if (id === 'linkedin') return 'bg-[#0077b5] text-white border-transparent';

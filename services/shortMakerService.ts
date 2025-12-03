@@ -1,8 +1,8 @@
 
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
-import { stitchVideoFrames, concatenateVideos, mergeVideoAudio } from "./ffmpegService";
-import { generateSpeech, getApiKey, combineAudioSegments, generateVeoVideo } from "./geminiService";
+import { stitchVideoFrames } from "./ffmpegService";
+import { generateSpeech, getApiKey, combineAudioSegments } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
 
 // ==========================================
@@ -35,7 +35,7 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
 export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMakerManifest> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
   
-  const durationMap: Record<string, number> = { '15s': 3, '30s': 5, '60s': 8 };
+  const durationMap: Record<string, number> = { '15s': 3, '30s': 6, '60s': 12 };
   const targetScenes = durationMap[req.durationTier || '30s'] || 5;
   const ratioText = req.aspectRatio || (req.mode === 'STORYBOOK' ? "16:9" : "9:16");
   const ideaClean = (req.idea || '').substring(0, 500).replace(/"/g, "'").replace(/\n/g, " ");
@@ -53,8 +53,8 @@ ${styleInstruction}
 
 CRITICAL RULES:
 1. **The Hook**: Scene 1 narration MUST be a strong hook (question, shocking statement, or "Stop scrolling").
-2. **Pacing**: Narration should be punchy, max 15 words per scene (Shorts need fast cuts).
-3. **Visuals**: Descriptions must be vivid, describing MOTION and ACTION for video generation.
+2. **Pacing**: Narration should be punchy, max 20 words per scene.
+3. **Visuals**: Descriptions must be vivid and specific for AI image generation.
 4. **Consistency**: Use 'character_tokens' to keep the main subject consistent across scenes.
 5. **Length**: Exactly ${targetScenes} scenes.
 
@@ -68,10 +68,10 @@ JSON SCHEMA:
     {
       "scene_number": "Number",
       "narration_text": "String (The spoken script)",
-      "visual_description": "String (Motion focus)",
+      "visual_description": "String (Brief logic)",
       "character_tokens": ["String", "String"],
       "environment_tokens": ["String", "String"],
-      "image_prompt": "String (Detailed prompt for Veo/Imagen: e.g. 'Cinematic shot of [character] running...')",
+      "image_prompt": "String (Detailed AI art prompt)",
       "timecodes": { "start_second": "Number", "end_second": "Number" }
     }
   ]
@@ -94,7 +94,7 @@ AspectRatio: "${ratioText}"
       contents: userPrompt,
       config: {
         systemInstruction: systemInstruction,
-        temperature: 0.4,
+        temperature: 0.3,
         maxOutputTokens: 8192,
         tools: [{ googleSearch: {} }] 
       }
@@ -176,21 +176,6 @@ export const generateSceneImage = async (
     }
 };
 
-// NEW: Generates an actual video clip for the scene using Veo
-export const generateSceneVideo = async (
-    scene: ShortMakerScene, 
-    styleTone?: string,
-    aspectRatio: string = '9:16'
-): Promise<string> => {
-    const style = styleTone || 'Cinematic';
-    // Enrich prompt for Veo
-    const prompt = `${style} style. ${scene.image_prompt}. ${scene.visual_description}. High quality, cinematic lighting, motion blur, 4k.`;
-    
-    // We use Veo Fast for efficiency in multi-scene generation
-    // Note: Veo Fast typically outputs 16:9 or 9:16
-    return await generateVeoVideo(prompt, { aspectRatio }, 'veo-3.1-fast-generate-preview');
-};
-
 export const synthesizeAudio = async (
     manifest: ShortMakerManifest, 
     elevenApiKey?: string,
@@ -228,58 +213,17 @@ export const synthesizeAudio = async (
     }
 
     // ElevenLabs Fallback (Simplified)
+    const fullText = manifest.scenes.map(s => s.narration_text).join(' <break time="0.5s" /> ');
+    // ... ElevenLabs Fetch Logic (omitted for brevity, same as before) ...
     throw new Error("ElevenLabs not configured fully in this snippet"); 
 };
 
-// Updated: Handles both Image Stitching (Storybook) and Video Concatenation (Shorts)
-export const assembleVideo = async (
-    manifest: ShortMakerManifest, 
-    backgroundMusicUrl?: string,
-    mode: 'SHORTS' | 'STORYBOOK' = 'STORYBOOK'
-): Promise<string> => {
-    
-    // CASE A: STORYBOOK (Images + Ken Burns)
-    if (mode === 'STORYBOOK') {
-        const scenes = manifest.scenes.filter(s => !!s.generated_image_url).map(s => ({
-            imageUrl: s.generated_image_url as string,
-            text: s.narration_text || ""
-        }));
-        const audioUrl = manifest.generated_audio_url;
-        if (scenes.length === 0) throw new Error("No images generated to assemble video");
-        return await stitchVideoFrames(scenes, audioUrl, undefined, undefined, undefined, backgroundMusicUrl);
-    }
-
-    // CASE B: SHORTS (Veo Videos + Narration)
-    console.log("Assembling Shorts (Video Mode)...");
-    
-    // 1. Generate Voiceover for EACH scene individually to match clips
-    // This is critical for Shorts timing.
-    const clipUrls: string[] = [];
-
-    for (const scene of manifest.scenes) {
-        if (!scene.generated_video_url) continue;
-
-        // A. Get/Gen Audio for this specific scene
-        let sceneAudioUrl = '';
-        if (scene.narration_text) {
-             try {
-                sceneAudioUrl = await generateSpeech(scene.narration_text, manifest.voice_instruction.voice || 'Fenrir');
-             } catch (e) { console.warn(`TTS failed for scene ${scene.scene_number}`); }
-        }
-
-        // B. Merge this Scene's Video + Audio
-        // If no narration, just use video. If narration, merge.
-        if (sceneAudioUrl) {
-            const mergedClip = await mergeVideoAudio(scene.generated_video_url, sceneAudioUrl);
-            clipUrls.push(mergedClip);
-        } else {
-            clipUrls.push(scene.generated_video_url);
-        }
-    }
-
-    if (clipUrls.length === 0) throw new Error("No video clips generated.");
-
-    // 2. Concatenate all merged clips
-    // 3. Add Background Music overlay
-    return await concatenateVideos(clipUrls, 1080, 1920, backgroundMusicUrl);
+export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusicUrl?: string): Promise<string> => {
+    const scenes = manifest.scenes.filter(s => !!s.generated_image_url).map(s => ({
+        imageUrl: s.generated_image_url as string,
+        text: s.narration_text || ""
+    }));
+    const audioUrl = manifest.generated_audio_url;
+    if (scenes.length === 0) throw new Error("No images generated to assemble video");
+    return await stitchVideoFrames(scenes, audioUrl, undefined, undefined, undefined, backgroundMusicUrl);
 };

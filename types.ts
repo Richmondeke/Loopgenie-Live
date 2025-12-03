@@ -1,6 +1,4 @@
 
-
-
 export enum AppView {
   TEMPLATES = 'TEMPLATES',
   PROJECTS = 'PROJECTS',
@@ -43,7 +41,7 @@ export interface Template {
   variables: TemplateVariable[];
   defaultAvatarId?: string;
   defaultVoiceId?: string;
-  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TIKTOK_CLONER'; 
+  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
 }
 
 export interface Project {
@@ -55,7 +53,7 @@ export interface Project {
   createdAt: number;
   videoUrl?: string; 
   error?: string;
-  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TIKTOK_CLONER'; 
+  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
   cost?: number; 
   user_email?: string;
 }
@@ -112,7 +110,6 @@ export interface ShortMakerScene {
   transition_to_next: string;
   timecodes: ShortMakerTimecodes;
   generated_image_url?: string;
-  generated_video_url?: string; // NEW: For Veo shorts
   generated_image_seed?: string;
 }
 
@@ -128,14 +125,6 @@ export interface ShortMakerManifest {
   generated_audio_url?: string;
   generated_video_url?: string;
   status?: "created" | "story_ready" | "images_processing" | "audio_processing" | "assembling" | "completed" | "failed";
-}
-
-// --- Fashion Types ---
-export interface FashionStyle {
-    id: string;
-    label: string;
-    desc: string;
-    img: string;
 }
 
 // --- Social Integration Types ---
@@ -167,6 +156,5 @@ export const APP_COSTS = {
     AUDIOBOOK: 5,          // Provider: ~$0.30 -> Price: $0.50
     SHORTS_15S: 5,         // Provider: ~$0.32 -> Price: $0.50
     SHORTS_30S: 9,         // Provider: ~$0.54 -> Price: $0.90
-    SHORTS_60S: 16,        // Provider: ~$1.03 -> Price: $1.60
-    TIKTOK_CLONE: 12       // Provider: ~$0.70 -> Price: $1.20
+    SHORTS_60S: 16         // Provider: ~$1.03 -> Price: $1.60
 };

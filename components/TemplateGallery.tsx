@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight, Wand2 } from 'lucide-react';
+import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight } from 'lucide-react';
 import { Template, HeyGenAvatar } from '../types';
 import { getAvatars } from '../services/heygenService';
 
@@ -57,16 +57,6 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
   // Tools Configuration with Categories
   const QUICK_TOOLS = [
     {
-        id: 'tiktok_cloner',
-        title: 'Viral Cloner',
-        desc: 'Clone any TikTok style',
-        icon: <Wand2 size={20} />,
-        color: 'bg-indigo-500',
-        text: 'text-indigo-500',
-        bg: 'bg-indigo-50 dark:bg-indigo-900/10',
-        onClick: () => onSelectTemplate({ id: 'tt_clone', name: 'Viral TikTok Cloner', thumbnailUrl: '', variables: [], mode: 'TIKTOK_CLONER', category: 'AI' })
-    },
-    {
         id: 'short_maker',
         title: 'ShortMaker',
         desc: 'Viral shorts in seconds',
@@ -96,6 +86,16 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         bg: 'bg-purple-50 dark:bg-purple-900/10',
         onClick: () => onSelectTemplate({ id: 'txt_vid', name: 'AI Video', thumbnailUrl: '', variables: [], mode: 'TEXT_TO_VIDEO', category: 'AI' })
     },
+    {
+        id: 'image_video',
+        title: 'Animate Image',
+        desc: 'Bring photos to life',
+        icon: <ImageIcon size={20} />,
+        color: 'bg-sky-500',
+        text: 'text-sky-500',
+        bg: 'bg-sky-50 dark:bg-sky-900/10',
+        onClick: () => onSelectTemplate({ id: 'img_vid', name: 'Image to Video', thumbnailUrl: '', variables: [], mode: 'IMAGE_TO_VIDEO', category: 'AI' })
+    }
   ];
 
   const STUDIO_TOOLS = [

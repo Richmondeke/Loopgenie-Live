@@ -1,5 +1,4 @@
 
-
 export interface VideoScene {
     imageUrl: string;
     text: string;
@@ -230,26 +229,18 @@ export const stitchVideoFrames = async (
         
         const combinedStream = new MediaStream(combinedTracks);
         
-        // Prioritize MP4 if supported by the browser (e.g. Safari, modern Chrome)
         const mimeTypes = [
-            'video/mp4',
-            'video/webm;codecs=h264',
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
             'video/webm',
             'video/mp4' 
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-        
-        // Ensure we pass a mimeType if one is found
-        const options: MediaRecorderOptions = {
-            videoBitsPerSecond: 3500000 // 3.5 Mbps
-        };
-        if (selectedMime) {
-            options.mimeType = selectedMime;
-        }
 
-        const recorder = new MediaRecorder(combinedStream, options);
+        const recorder = new MediaRecorder(combinedStream, {
+            mimeType: selectedMime,
+            videoBitsPerSecond: 3500000 // 3.5 Mbps
+        });
 
         const chunks: Blob[] = [];
         recorder.ondataavailable = (e) => {
@@ -258,9 +249,7 @@ export const stitchVideoFrames = async (
 
         recorder.onstop = () => {
             clearTimeout(timeoutId);
-            // Default to selectedMime or mp4/webm fallback
-            const finalType = selectedMime || 'video/webm';
-            const blob = new Blob(chunks, { type: finalType });
+            const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
             const url = URL.createObjectURL(blob);
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
             resolve(url);
@@ -389,15 +378,12 @@ export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promi
             const stream = canvas.captureStream(30);
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
             const combinedStream = new MediaStream(tracks);
-            
-            // Prefer mp4
-            const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
-            const recorder = new MediaRecorder(combinedStream, { mimeType });
-            
+
+            const recorder = new MediaRecorder(combinedStream);
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: mimeType });
+                const blob = new Blob(chunks, { type: 'video/webm' });
                 resolve(URL.createObjectURL(blob));
                 audioContext.close();
             };
@@ -428,22 +414,17 @@ export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promi
  */
 export const concatenateVideos = async (
     videoUrls: string[], 
-    width: number = 1080, 
-    height: number = 1920,
+    width: number = 1280, 
+    height: number = 720,
     backgroundAudioUrl?: string
 ): Promise<string> => {
     return new Promise(async (resolve, reject) => {
         try {
-            console.log("Starting video concatenation for", videoUrls.length, "clips.");
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
-            
-            // Fill black
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, width, height);
 
             // Optional Background Audio
             let audioContext: AudioContext | null = null;
@@ -459,43 +440,21 @@ export const concatenateVideos = async (
                 dest = audioContext.createMediaStreamDestination();
                 const source = audioContext.createBufferSource();
                 source.buffer = buffer;
-                source.loop = true;
-                
-                // Low volume for BG
-                const gain = audioContext.createGain();
-                gain.gain.value = 0.15;
-                
-                source.connect(gain);
-                gain.connect(dest);
+                source.connect(dest);
                 source.start(0);
             }
 
             const stream = canvas.captureStream(30);
-            // We need to capture audio from the videos being played too.
-            // Since we play videos on DOM (hidden or not), we can captureStream() from them,
-            // but merging multiple dynamic streams into one recorder is tricky.
-            // Simplified approach: Each videoUrl passed in *already has* its narration merged.
-            // So we just need to play them and capture the canvas.
-            // Wait: Canvas captureStream() does NOT capture audio from the video element drawn on it.
-            // We need to create an audio destination that sums up the current playing video's audio.
+            const tracks = [...stream.getVideoTracks()];
+            if (dest) tracks.push(...dest.stream.getAudioTracks());
             
-            if (!audioContext) {
-                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-                 audioContext = new AudioContextClass();
-                 dest = audioContext.createMediaStreamDestination();
-            }
-
-            const videoTracks = stream.getVideoTracks();
-            const audioTracks = dest!.stream.getAudioTracks();
-            const combinedStream = new MediaStream([...videoTracks, ...audioTracks]);
-
-            const mimeType = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm';
-            const recorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 5000000 });
-            
+            const combinedStream = new MediaStream(tracks);
+            const recorder = new MediaRecorder(combinedStream);
             const chunks: Blob[] = [];
+            
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
-                 const blob = new Blob(chunks, { type: mimeType });
+                 const blob = new Blob(chunks, { type: 'video/webm' });
                  resolve(URL.createObjectURL(blob));
                  if (audioContext) audioContext.close();
             };
@@ -505,30 +464,21 @@ export const concatenateVideos = async (
             // Sequential Playback
             for (const url of videoUrls) {
                 const vid = await loadVideo(url);
-                
-                // Connect video audio to our destination
-                // NOTE: We need to use createMediaElementSource, but that requires CORS or same-origin.
-                // Our loadVideo helper sets crossOrigin anonymous.
-                // However, capturing audio from element source often requires user interaction first.
-                // This is a browser limitation.
-                try {
-                     const source = audioContext!.createMediaElementSource(vid);
-                     source.connect(dest!);
-                } catch(e) {
-                     console.warn("Could not attach audio source for clip (CORS/Interaction issue):", e);
-                }
-
                 await vid.play();
                 
-                const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 10;
-                const startTime = Date.now();
+                // Safety: If video has no duration or is Infinite, use sane fallback
+                // This prevents hanging if 'ended' event doesn't fire
+                const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 15;
 
                 // Draw loop for this video
                 await new Promise<void>(res => {
+                    const startTime = Date.now();
+                    
                     const draw = () => {
                         const elapsed = (Date.now() - startTime) / 1000;
                         
-                        if (vid.paused || vid.ended || elapsed > safeDuration + 0.5) {
+                        // Strict safety check: End if paused, ended, OR elapsed time > duration + 1s buffer
+                        if (vid.paused || vid.ended || elapsed > safeDuration + 1) {
                             res();
                             return;
                         }
@@ -537,19 +487,9 @@ export const concatenateVideos = async (
                         const imgRatio = vid.videoWidth / vid.videoHeight;
                         const canvasRatio = width / height;
                         
-                        // Center Crop Logic
-                        let renderW = width, renderH = height, offsetX = 0, offsetY = 0;
-                        if (imgRatio > canvasRatio) {
-                             renderH = height; 
-                             renderW = height * imgRatio;
-                             offsetX = -(renderW - width) / 2;
-                        } else {
-                             renderW = width;
-                             renderH = width / imgRatio;
-                             offsetY = -(renderH - height) / 2;
-                        }
-
-                        ctx.drawImage(vid, offsetX, offsetY, renderW, renderH);
+                        // To keep it simple for now: Draw full size
+                        ctx.drawImage(vid, 0, 0, width, height);
+                        
                         requestAnimationFrame(draw);
                     };
                     draw();

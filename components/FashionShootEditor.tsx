@@ -1,12 +1,8 @@
 
 import React, { useState, useRef } from 'react';
-import { 
-    Camera, Upload, Sparkles, Image as ImageIcon, Loader2, 
-    Download, CheckCircle, RefreshCw, X, ShoppingBag, Layers, 
-    ArrowRight, Wand2
-} from 'lucide-react';
-import { Template, APP_COSTS } from '../types';
-import { analyzeProductImage, generateFashionAssets } from '../services/geminiService';
+import { Camera, Upload, Sparkles, Image as ImageIcon, Loader2, Download, RefreshCw, CheckCircle, X, ChevronRight, Layers } from 'lucide-react';
+import { Template } from '../types';
+import { analyzeProductImage, generateFashionImage } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
 
 interface FashionShootEditorProps {
@@ -14,328 +10,330 @@ interface FashionShootEditorProps {
     onGenerate: (data: any) => Promise<void> | void;
     userCredits: number;
     template: Template;
+    isGenerating?: boolean; // Passed from parent if needed
 }
 
 const STYLES = [
-    { id: 'Minimalist Studio', label: 'Minimalist Studio', desc: 'Clean background, soft shadows, high-end look.', img: 'https://images.unsplash.com/photo-1618331835717-801e976710b2?auto=format&fit=crop&w=300&q=80' },
-    { id: 'Streetwear Urban', label: 'Streetwear / Urban', desc: 'Concrete, neon lights, city vibe.', img: 'https://images.unsplash.com/photo-1552346154-21d32810aba3?auto=format&fit=crop&w=300&q=80' },
-    { id: 'Nature Organic', label: 'Nature / Organic', desc: 'Sunlight, plants, wood textures, outdoors.', img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80' },
-    { id: 'Luxury Interior', label: 'Luxury Interior', desc: 'Marble, gold accents, warm lighting.', img: 'https://images.unsplash.com/photo-1631679706909-1844bbd07221?auto=format&fit=crop&w=300&q=80' },
-    { id: 'Neon Cyberpunk', label: 'Neon Cyberpunk', desc: 'Futuristic, vibrant pinks and blues.', img: 'https://images.unsplash.com/photo-1555685812-4b943f3db990?auto=format&fit=crop&w=300&q=80' },
-    { id: 'Editorial', label: 'High Fashion Editorial', desc: 'Dramatic lighting, artistic angles.', img: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=300&q=80' },
+    { id: 'studio', label: 'Studio Minimal', prompt: 'clean studio background, professional fashion photography, soft lighting, minimalist, high fashion, 8k, highly detailed' },
+    { id: 'street', label: 'Street Style', prompt: 'urban street style, natural lighting, candid shot, city background, trendy, vogue editorial, 8k' },
+    { id: 'luxury', label: 'Luxury / Editorial', prompt: 'luxury fashion editorial, dramatic lighting, rich textures, elegance, vogue cover style, cinematic, 8k' },
+    { id: 'nature', label: 'Nature / Bohemian', prompt: 'outdoor nature setting, golden hour sunlight, soft bokeh, bohemian vibe, organic textures, 8k' },
+    { id: 'cyber', label: 'Cyberpunk / Neon', prompt: 'neon lighting, cyberpunk aesthetic, futuristic fashion, night city, glowing accents, high contrast, 8k' },
 ];
 
-export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
-    // Mode State
+export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, onGenerate, userCredits }) => {
     const [mode, setMode] = useState<'IMAGINE' | 'UPLOAD'>('IMAGINE');
-    
-    // Inputs
-    const [productDescription, setProductDescription] = useState('');
-    const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-    const [uploadedPreview, setUploadedPreview] = useState<string | null>(null);
+    const [prompt, setPrompt] = useState('');
     const [selectedStyle, setSelectedStyle] = useState(STYLES[0].id);
     const [quantity, setQuantity] = useState<1 | 2 | 4>(1);
-    
-    // Processing State
-    const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [isGenerating, setIsGenerating] = useState(false);
-    const [statusText, setStatusText] = useState('');
+    const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState(false);
     const [generatedImages, setGeneratedImages] = useState<string[]>([]);
-    const [selectedResult, setSelectedResult] = useState<string | null>(null);
-    const [savedCount, setSavedCount] = useState(0);
+    const [statusText, setStatusText] = useState('');
+    const [selectedResults, setSelectedResults] = useState<number[]>([]);
 
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const COST_PER_IMAGE = 2;
+    const totalCost = quantity * COST_PER_IMAGE;
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            setUploadedFile(file);
-            setUploadedPreview(URL.createObjectURL(file));
-            setGeneratedImages([]); // Clear previous results
+            const reader = new FileReader();
+            reader.onloadend = () => setUploadedImage(reader.result as string);
+            reader.readAsDataURL(file);
         }
     };
 
-    const cost = quantity * APP_COSTS.FASHION; // 2 credits per image
-
-    const handleGenerate = async () => {
-        if (userCredits < cost) {
-            alert("Insufficient credits.");
+    const handleRunShoot = async () => {
+        if (userCredits < totalCost) {
+            alert("Insufficient credits");
             return;
         }
         
-        setIsGenerating(true);
+        setIsProcessing(true);
         setGeneratedImages([]);
-        setSelectedResult(null);
-
+        setSelectedResults([]);
+        
         try {
-            let finalPromptDescription = productDescription;
+            let baseDescription = prompt;
 
-            // 1. Analyze Uploaded Image (if in Upload mode)
-            if (mode === 'UPLOAD' && uploadedFile) {
+            // Step 1: Analyze if in Upload mode
+            if (mode === 'UPLOAD' && uploadedImage) {
                 setStatusText("Analyzing product details...");
-                setIsAnalyzing(true);
-                const analysis = await analyzeProductImage(uploadedFile);
-                // Combine analysis with user's specific context request
-                finalPromptDescription = `Subject: ${analysis}. Context/Setting: ${productDescription || 'A professional product shot'}.`;
-                setIsAnalyzing(false);
-            } else if (mode === 'IMAGINE') {
-                if (!productDescription.trim()) {
-                    alert("Please describe your product idea.");
-                    setIsGenerating(false);
-                    return;
-                }
-                finalPromptDescription = productDescription;
+                const analysis = await analyzeProductImage(uploadedImage);
+                baseDescription = `${analysis}. ${prompt}`; // Combine analysis with user notes
             }
 
-            // 2. Generate Images
-            setStatusText(`Generating ${quantity} variations...`);
-            const images = await generateFashionAssets(finalPromptDescription, selectedStyle, quantity);
-            
-            setGeneratedImages(images);
-            if (images.length > 0) setSelectedResult(images[0]);
+            if (!baseDescription.trim()) {
+                throw new Error("Please enter a description or upload an image.");
+            }
 
-        } catch (e: any) {
-            console.error(e);
-            alert("Generation failed: " + e.message);
+            // Step 2: Generate Images
+            setStatusText(`Shooting ${quantity} photos...`);
+            const stylePrompt = STYLES.find(s => s.id === selectedStyle)?.prompt || '';
+            const fullPrompt = `Fashion photography of ${baseDescription}. ${stylePrompt}`;
+
+            const promises = Array(quantity).fill(0).map(() => generateFashionImage(fullPrompt));
+            const results = await Promise.all(promises);
+
+            setGeneratedImages(results.filter(url => !!url));
+            setStatusText("Shoot complete!");
+
+        } catch (error: any) {
+            console.error(error);
+            alert(`Error: ${error.message}`);
         } finally {
-            setIsGenerating(false);
-            setIsAnalyzing(false);
-            setStatusText('');
+            setIsProcessing(false);
         }
     };
 
-    const handleSaveSelection = async () => {
-        if (!selectedResult) return;
+    const handleSaveSelected = async () => {
+        if (selectedResults.length === 0) return;
         
+        // Save the first selected one as the "Main" project, others could be handled differently 
+        // but for simplicity we'll save the first one and maybe trigger multiple saves if the API supported it.
+        // For now, we save the FIRST selected image as the project result.
+        
+        setIsProcessing(true);
+        setStatusText("Saving to Gallery...");
+
         try {
-            setStatusText("Saving to portfolio...");
-            const permUrl = await uploadToStorage(selectedResult, `fashion_${Date.now()}.png`, 'fashion');
+            const mainImageUrl = generatedImages[selectedResults[0]];
+            // Upload to permanent storage
+            const permUrl = await uploadToStorage(mainImageUrl, `fashion_${Date.now()}.png`, 'fashion');
             
             await onGenerate({
                 isDirectSave: true,
-                videoUrl: permUrl, // Storing image url in videoUrl field for consistency
+                videoUrl: permUrl, // Storing image in videoUrl field for compatibility
                 thumbnailUrl: permUrl,
-                cost: APP_COSTS.FASHION, // Only charge for the one saved (or we deducted upfront, logic depends on app flow)
-                templateName: mode === 'UPLOAD' ? 'Virtual Shoot' : 'Fashion Concept',
+                cost: totalCost,
                 type: 'FASHION_SHOOT',
-                shouldRedirect: false
+                templateName: `Fashion Shoot (${mode === 'UPLOAD' ? 'Product' : 'Concept'})`,
+                shouldRedirect: true
             });
-            setSavedCount(prev => prev + 1);
-            setStatusText("");
-            alert("Saved to My Projects!");
         } catch (e: any) {
-            alert("Save failed: " + e.message);
+            alert("Failed to save: " + e.message);
+            setIsProcessing(false);
+        }
+    };
+
+    const toggleSelection = (index: number) => {
+        if (selectedResults.includes(index)) {
+            setSelectedResults(prev => prev.filter(i => i !== index));
+        } else {
+            setSelectedResults(prev => [...prev, index]);
         }
     };
 
     return (
-        <div className="h-full bg-black text-white p-4 lg:p-8 overflow-y-auto">
-            <div className="max-w-7xl mx-auto h-full flex flex-col">
-                
-                {/* Header */}
-                <div className="flex items-center justify-between mb-8 flex-shrink-0">
-                    <div className="flex items-center gap-4">
-                        <button onClick={onBack} className="p-2 hover:bg-gray-800 rounded-full transition-colors">
-                            <ArrowRight className="rotate-180" size={24} />
-                        </button>
-                        <div>
-                            <h1 className="text-2xl font-bold flex items-center gap-2">
-                                <Camera className="text-rose-500" /> Fashion Photoshoot
-                            </h1>
-                            <p className="text-gray-400 text-sm">AI-powered product photography studio.</p>
-                        </div>
-                    </div>
-                    <div className="flex bg-gray-900 p-1 rounded-xl">
-                        <button 
-                            onClick={() => setMode('IMAGINE')}
-                            className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${mode === 'IMAGINE' ? 'bg-rose-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                        >
-                            <Sparkles size={16} /> Imagine Idea
-                        </button>
-                        <button 
-                            onClick={() => setMode('UPLOAD')}
-                            className={`px-6 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${mode === 'UPLOAD' ? 'bg-rose-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                        >
-                            <Upload size={16} /> Virtual Shoot
-                        </button>
-                    </div>
+        <div className="h-full bg-white dark:bg-black text-gray-900 dark:text-white flex flex-col md:flex-row overflow-hidden">
+            {/* LEFT PANEL: Controls */}
+            <div className="w-full md:w-[400px] bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col h-full overflow-y-auto custom-scrollbar">
+                <div className="p-6 border-b border-gray-200 dark:border-gray-800">
+                    <button onClick={onBack} className="flex items-center gap-2 text-gray-500 hover:text-gray-900 dark:hover:text-white mb-4 transition-colors">
+                        <ChevronRight className="rotate-180" size={16} /> Back to Studio
+                    </button>
+                    <h2 className="text-2xl font-bold flex items-center gap-2">
+                        <Camera className="text-rose-500" /> Fashion Shoot
+                    </h2>
+                    <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">AI-powered professional photography.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1 min-h-0">
-                    
-                    {/* LEFT PANEL: Controls */}
-                    <div className="lg:col-span-4 space-y-6 overflow-y-auto custom-scrollbar pr-2 pb-20">
-                        
-                        {/* INPUT SECTION */}
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-sm">
-                            <h3 className="text-sm font-bold text-gray-400 uppercase mb-4 flex items-center gap-2">
-                                {mode === 'UPLOAD' ? <Layers size={16}/> : <Wand2 size={16}/>}
-                                {mode === 'UPLOAD' ? 'Source Product' : 'Product Concept'}
-                            </h3>
-
-                            {mode === 'UPLOAD' ? (
-                                <div className="space-y-4">
-                                    <div 
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className={`border-2 border-dashed rounded-xl h-48 flex flex-col items-center justify-center cursor-pointer transition-all relative overflow-hidden group ${uploadedFile ? 'border-rose-500/50' : 'border-gray-700 hover:border-gray-500 hover:bg-gray-800'}`}
-                                    >
-                                        <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="image/*" className="hidden" />
-                                        {uploadedPreview ? (
-                                            <img src={uploadedPreview} alt="Preview" className="w-full h-full object-contain p-2" />
-                                        ) : (
-                                            <div className="text-center p-4">
-                                                <div className="w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition-transform">
-                                                    <Upload size={20} className="text-gray-400" />
-                                                </div>
-                                                <p className="text-sm font-bold text-gray-300">Upload Product Photo</p>
-                                                <p className="text-xs text-gray-500 mt-1">Clear background preferred</p>
-                                            </div>
-                                        )}
-                                        {uploadedPreview && (
-                                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                <span className="text-white text-sm font-bold">Change Image</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                    <textarea
-                                        value={productDescription}
-                                        onChange={(e) => setProductDescription(e.target.value)}
-                                        placeholder="Describe the setting (e.g., 'Sitting on a wooden table in a cafe')..."
-                                        className="w-full bg-black border border-gray-700 rounded-xl p-3 text-sm text-white focus:ring-1 focus:ring-rose-500 outline-none resize-none h-24"
-                                    />
-                                </div>
-                            ) : (
-                                <textarea
-                                    value={productDescription}
-                                    onChange={(e) => setProductDescription(e.target.value)}
-                                    placeholder="Describe your product idea in detail (e.g., 'A futuristic sneaker with glowing neon soles, floating in zero gravity')..."
-                                    className="w-full bg-black border border-gray-700 rounded-xl p-4 text-sm text-white focus:ring-1 focus:ring-rose-500 outline-none resize-none h-48"
-                                />
-                            )}
-                        </div>
-
-                        {/* STYLE SELECTOR */}
-                        <div>
-                            <h3 className="text-sm font-bold text-gray-400 uppercase mb-3 px-1">Choose Aesthetic</h3>
-                            <div className="grid grid-cols-2 gap-3">
-                                {STYLES.map(s => (
-                                    <div 
-                                        key={s.id}
-                                        onClick={() => setSelectedStyle(s.id)}
-                                        className={`relative h-24 rounded-xl overflow-hidden cursor-pointer group transition-all border-2 ${selectedStyle === s.id ? 'border-rose-500 shadow-rose-500/20 shadow-lg scale-[1.02]' : 'border-transparent opacity-70 hover:opacity-100'}`}
-                                    >
-                                        <img src={s.img} alt={s.label} className="w-full h-full object-cover" />
-                                        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent p-3 flex flex-col justify-end">
-                                            <span className="text-xs font-bold text-white leading-tight">{s.label}</span>
-                                        </div>
-                                        {selectedStyle === s.id && <div className="absolute top-2 right-2 bg-rose-500 rounded-full p-1"><CheckCircle size={10} className="text-white"/></div>}
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* QUANTITY */}
-                        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between">
-                            <span className="text-sm font-bold text-gray-300">Variations</span>
-                            <div className="flex bg-black p-1 rounded-lg">
-                                {[1, 2, 4].map(num => (
-                                    <button
-                                        key={num}
-                                        onClick={() => setQuantity(num as 1|2|4)}
-                                        className={`w-10 h-8 rounded-md text-xs font-bold transition-all ${quantity === num ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
-                                    >
-                                        {num}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* ACTION */}
-                        <div className="pt-2">
-                            <div className="flex justify-between text-xs text-gray-500 mb-2 px-1">
-                                <span>Total Cost</span>
-                                <span className={userCredits < cost ? 'text-red-500 font-bold' : 'text-rose-300'}>{cost} Credits</span>
-                            </div>
-                            <button
-                                onClick={handleGenerate}
-                                disabled={isGenerating || (mode === 'UPLOAD' && !uploadedFile)}
-                                className={`w-full py-4 rounded-xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
-                                    isGenerating || (mode === 'UPLOAD' && !uploadedFile)
-                                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                                    : 'bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 hover:shadow-rose-500/25'
-                                }`}
+                <div className="p-6 space-y-8 flex-1">
+                    {/* Mode Selection */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Shoot Mode</label>
+                        <div className="grid grid-cols-2 gap-2 bg-gray-200 dark:bg-gray-800 p-1 rounded-xl">
+                            <button 
+                                onClick={() => setMode('IMAGINE')}
+                                className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'IMAGINE' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
                             >
-                                {isGenerating ? <Loader2 className="animate-spin" /> : <Camera size={20} />}
-                                {isGenerating ? (isAnalyzing ? 'Analyzing...' : 'Developing Photos...') : 'Generate Photoshoot'}
+                                <Sparkles size={16} /> Imagine
+                            </button>
+                            <button 
+                                onClick={() => setMode('UPLOAD')}
+                                className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'UPLOAD' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                            >
+                                <Upload size={16} /> Upload
                             </button>
                         </div>
                     </div>
 
-                    {/* RIGHT PANEL: Results */}
-                    <div className="lg:col-span-8 flex flex-col h-full bg-[#121214] border border-[#27272a] rounded-3xl overflow-hidden shadow-2xl relative">
-                        {statusText && (
-                            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md text-white px-4 py-2 rounded-full text-xs font-bold z-20 flex items-center gap-2 border border-gray-700">
-                                <Loader2 className="animate-spin text-rose-500" size={14} /> {statusText}
+                    {/* Input Area */}
+                    {mode === 'UPLOAD' ? (
+                        <div className="animate-in fade-in slide-in-from-left-4 duration-300">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Product Image</label>
+                            <div className={`relative border-2 border-dashed rounded-2xl h-48 flex flex-col items-center justify-center transition-all ${uploadedImage ? 'border-rose-500 bg-gray-900' : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 bg-white dark:bg-gray-800'}`}>
+                                {uploadedImage ? (
+                                    <>
+                                        <img src={uploadedImage} alt="Upload" className="h-full w-full object-contain rounded-2xl opacity-60" />
+                                        <div className="absolute inset-0 flex items-center justify-center">
+                                            <button onClick={() => setUploadedImage(null)} className="bg-black/70 hover:bg-black text-white p-2 rounded-full backdrop-blur-sm">
+                                                <X size={20} />
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <label className="cursor-pointer flex flex-col items-center p-4 text-center w-full h-full justify-center">
+                                        <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-3 text-gray-400">
+                                            <ImageIcon size={24} />
+                                        </div>
+                                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Click to upload product</span>
+                                        <span className="text-xs text-gray-400 mt-1">Supported: JPG, PNG</span>
+                                        <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                                    </label>
+                                )}
                             </div>
-                        )}
+                            <div className="mt-4">
+                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Additional Notes (Optional)</label>
+                                <input 
+                                    type="text" 
+                                    value={prompt}
+                                    onChange={(e) => setPrompt(e.target.value)}
+                                    placeholder="E.g. On a marble table, morning light..."
+                                    className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-rose-500 outline-none" 
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="animate-in fade-in slide-in-from-right-4 duration-300">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Describe Outfit / Product</label>
+                            <textarea 
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                placeholder="E.g. A futuristic red leather jacket with neon accents..."
+                                className="w-full h-40 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm focus:ring-2 focus:ring-rose-500 outline-none resize-none" 
+                            />
+                        </div>
+                    )}
 
-                        {generatedImages.length > 0 ? (
-                            <div className="flex-1 flex flex-col h-full">
-                                {/* Main Preview */}
-                                <div className="flex-1 bg-black relative flex items-center justify-center p-4 overflow-hidden">
-                                    {selectedResult && (
-                                        <img src={selectedResult} alt="Result" className="w-full h-full object-contain shadow-2xl rounded-lg" />
-                                    )}
-                                </div>
-                                
-                                {/* Thumbnails & Actions */}
-                                <div className="h-32 bg-gray-900 border-t border-gray-800 p-4 flex items-center gap-4">
-                                    <div className="flex gap-3 overflow-x-auto no-scrollbar flex-1 h-full items-center">
-                                        {generatedImages.map((img, idx) => (
-                                            <div 
-                                                key={idx}
-                                                onClick={() => setSelectedResult(img)}
-                                                className={`h-20 w-20 rounded-lg overflow-hidden cursor-pointer border-2 transition-all flex-shrink-0 relative ${selectedResult === img ? 'border-rose-500 scale-105' : 'border-gray-700 hover:border-gray-500'}`}
-                                            >
-                                                <img src={img} className="w-full h-full object-cover" />
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="h-12 w-px bg-gray-700 mx-2"></div>
-                                    <div className="flex gap-2">
-                                        {selectedResult && (
-                                            <>
-                                                <a 
-                                                    href={selectedResult} 
-                                                    download={`fashion_shoot_${Date.now()}.png`} 
-                                                    className="p-3 bg-gray-800 hover:bg-gray-700 rounded-xl text-white transition-colors"
-                                                    title="Download"
-                                                >
-                                                    <Download size={20} />
-                                                </a>
-                                                <button 
-                                                    onClick={handleSaveSelection}
-                                                    className="px-6 py-3 bg-white text-black hover:bg-gray-200 rounded-xl font-bold transition-colors flex items-center gap-2 shadow-lg"
-                                                >
-                                                    <ShoppingBag size={18} /> Save to Project
-                                                </button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 opacity-50">
-                                <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6">
-                                    <ImageIcon size={48} className="text-gray-600" />
-                                </div>
-                                <h3 className="text-xl font-bold text-gray-300">No Photos Yet</h3>
-                                <p className="text-gray-500 max-w-sm mt-2">Set your style, describe your product, and click Generate to start your virtual photoshoot.</p>
-                            </div>
-                        )}
+                    {/* Styles */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Photography Style</label>
+                        <div className="grid grid-cols-1 gap-2">
+                            {STYLES.map(style => (
+                                <button
+                                    key={style.id}
+                                    onClick={() => setSelectedStyle(style.id)}
+                                    className={`px-4 py-3 rounded-xl text-left text-sm font-medium border transition-all ${
+                                        selectedStyle === style.id 
+                                        ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 text-rose-700 dark:text-rose-400' 
+                                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-rose-300'
+                                    }`}
+                                >
+                                    {style.label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
+                    {/* Quantity */}
+                    <div>
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Quantity</label>
+                        <div className="flex gap-2">
+                            {[1, 2, 4].map(num => (
+                                <button
+                                    key={num}
+                                    onClick={() => setQuantity(num as any)}
+                                    className={`flex-1 py-2 rounded-lg text-sm font-bold border transition-all ${
+                                        quantity === num 
+                                        ? 'bg-rose-500 text-white border-rose-500' 
+                                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 hover:border-gray-400'
+                                    }`}
+                                >
+                                    {num}x
+                                </button>
+                            ))}
+                        </div>
+                        <p className="text-xs text-center mt-2 text-gray-500">
+                            Total Cost: <span className="font-bold text-rose-500">{totalCost} Credits</span>
+                        </p>
+                    </div>
                 </div>
+
+                <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
+                    <button 
+                        onClick={handleRunShoot}
+                        disabled={isProcessing || (!uploadedImage && !prompt) || userCredits < totalCost}
+                        className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl ${
+                            isProcessing || (!uploadedImage && !prompt) || userCredits < totalCost
+                            ? 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-rose-500 to-pink-600 text-white hover:scale-[1.02]'
+                        }`}
+                    >
+                        {isProcessing ? <Loader2 className="animate-spin" /> : <Camera />} 
+                        {isProcessing ? 'Shooting...' : 'Start Shoot'}
+                    </button>
+                </div>
+            </div>
+
+            {/* RIGHT PANEL: Results */}
+            <div className="flex-1 bg-gray-100 dark:bg-black p-4 md:p-8 overflow-y-auto flex flex-col items-center">
+                {generatedImages.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 max-w-sm text-center">
+                        <div className="w-24 h-24 bg-gray-200 dark:bg-gray-900 rounded-full flex items-center justify-center mb-6">
+                            {isProcessing ? <Loader2 size={40} className="animate-spin text-rose-500" /> : <Layers size={40} />}
+                        </div>
+                        {isProcessing ? (
+                            <>
+                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Photoshoot in Progress</h3>
+                                <p className="text-sm">{statusText}</p>
+                            </>
+                        ) : (
+                            <>
+                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Ready to Shoot</h3>
+                                <p className="text-sm">Configure your settings on the left and click "Start Shoot" to generate professional fashion imagery.</p>
+                            </>
+                        )}
+                    </div>
+                ) : (
+                    <div className="w-full max-w-5xl">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Shoot Results</h3>
+                            <div className="flex gap-3">
+                                <button 
+                                    onClick={handleRunShoot}
+                                    className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-bold hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-white flex items-center gap-2"
+                                >
+                                    <RefreshCw size={14} /> Retry
+                                </button>
+                                <button 
+                                    onClick={handleSaveSelected}
+                                    disabled={selectedResults.length === 0}
+                                    className={`px-6 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
+                                        selectedResults.length > 0 
+                                        ? 'bg-rose-600 text-white shadow-lg hover:bg-rose-500' 
+                                        : 'bg-gray-200 dark:bg-gray-800 text-gray-400 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <Download size={16} /> Save Selected ({selectedResults.length})
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className={`grid gap-6 ${generatedImages.length === 1 ? 'grid-cols-1 max-w-2xl mx-auto' : 'grid-cols-1 md:grid-cols-2'}`}>
+                            {generatedImages.map((img, idx) => (
+                                <div 
+                                    key={idx} 
+                                    onClick={() => toggleSelection(idx)}
+                                    className={`relative group cursor-pointer rounded-2xl overflow-hidden transition-all duration-300 ${
+                                        selectedResults.includes(idx) 
+                                        ? 'ring-4 ring-rose-500 shadow-xl scale-[1.02]' 
+                                        : 'hover:shadow-lg hover:scale-[1.01]'
+                                    }`}
+                                >
+                                    <img src={img} alt={`Result ${idx}`} className="w-full h-auto object-cover" />
+                                    <div className={`absolute top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center shadow-md transition-all ${
+                                        selectedResults.includes(idx) ? 'bg-rose-500 text-white' : 'bg-white/80 text-gray-400 group-hover:bg-white'
+                                    }`}>
+                                        <CheckCircle size={20} className={selectedResults.includes(idx) ? 'fill-current' : ''} />
+                                    </div>
+                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
