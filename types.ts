@@ -41,7 +41,7 @@ export interface Template {
   variables: TemplateVariable[];
   defaultAvatarId?: string;
   defaultVoiceId?: string;
-  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
+  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE'; 
 }
 
 export interface Project {
@@ -53,7 +53,7 @@ export interface Project {
   createdAt: number;
   videoUrl?: string; 
   error?: string;
-  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO'; 
+  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE'; 
   cost?: number; 
   user_email?: string;
 }

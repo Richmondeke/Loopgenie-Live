@@ -2,11 +2,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ArrowLeft, Sparkles, Video, Loader2, Wand2, Upload, Plus, Film, Image as ImageIcon, Music, Trash2, Pause, AlertCircle, Zap, Download, Clapperboard, Camera, Play, CheckCircle, RectangleHorizontal, RectangleVertical, Headphones } from 'lucide-react';
 import { Template, HeyGenAvatar, HeyGenVoice, ProjectStatus, APP_COSTS } from '../types';
-import { generateScriptContent, generateSpeech, generateFashionImage } from '../services/geminiService';
+import { generateScriptContent, generateSpeech } from '../services/geminiService';
 import { getAvatars, getVoices, generateVideo, checkVideoStatus } from '../services/heygenService';
 import { ShortMakerEditor } from './ShortMakerEditor';
 import { FashionShootEditor } from './FashionShootEditor';
-import { cropVideo, concatenateVideos, mergeVideoAudio, stitchVideoFrames } from '../services/ffmpegService';
+import { AudiobookEditor } from './AudiobookEditor';
+import { ImageToVideoEditor } from './ImageToVideoEditor';
+import { cropVideo, stitchVideoFrames } from '../services/ffmpegService';
 import { uploadToStorage } from '../services/storageService';
 
 interface EditorProps {
@@ -19,7 +21,6 @@ interface EditorProps {
 }
 
 const AvatarEditor: React.FC<EditorProps> = ({ template, onGenerate, isGenerating, heyGenKey, userCredits }) => {
-    // ... (AvatarEditor implementation remains the same)
     const [script, setScript] = useState('');
     const [avatars, setAvatars] = useState<HeyGenAvatar[]>([]);
     const [allVoices, setAllVoices] = useState<HeyGenVoice[]>([]); 
@@ -250,10 +251,6 @@ const AvatarEditor: React.FC<EditorProps> = ({ template, onGenerate, isGeneratin
             </div>
         )}
         
-        {/* ... Avatar Editor Content (Script area, voice selector) ... */}
-        {/* Simplified for brevity as we are focusing on FashionShoot integration below, 
-            but in real code the full JSX from previous file would be here */}
-            
         <div className="flex-1 flex flex-col h-full overflow-y-auto pr-2 pb-20 space-y-8 no-scrollbar">
             {/* Script Input Area */}
             <div className="space-y-4">
@@ -306,30 +303,23 @@ const AvatarEditor: React.FC<EditorProps> = ({ template, onGenerate, isGeneratin
     );
 };
 
-const AudiobookEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => {
-    // ... (Keep existing AudiobookEditor logic) ...
-    return <div className="p-4">Audiobook Editor Placeholder</div>;
-};
-
-const ProductUGCEditor: React.FC<EditorProps> = ({ onGenerate, userCredits }) => {
-     // ... (Keep existing ProductUGCEditor logic) ...
-    return <div className="p-4">UGC Editor Placeholder</div>;
-};
-
-const TextToVideoEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {...props} />;
-const ImageToVideoEditor: React.FC<EditorProps> = (props) => <ProductUGCEditor {...props} />;
-
 export const Editor: React.FC<EditorProps> = (props) => {
     const { template, onBack } = props;
     let content;
-    if (template.mode === 'TEXT_TO_VIDEO') content = <TextToVideoEditor {...props} />;
-    else if (template.mode === 'UGC_PRODUCT') content = <ProductUGCEditor {...props} />;
-    else if (template.mode === 'FASHION_SHOOT') content = <FashionShootEditor {...props} />; // USED HERE
-    else if (template.mode === 'SHORTS') content = <ShortMakerEditor {...props} />;
-    else if (template.mode === 'STORYBOOK') content = <ShortMakerEditor {...props} />;
-    else if (template.mode === 'AUDIOBOOK') content = <AudiobookEditor {...props} />;
-    else if (template.mode === 'IMAGE_TO_VIDEO') content = <ImageToVideoEditor {...props} />;
-    else content = <AvatarEditor {...props} />;
+    
+    // Route to specialized editors based on template mode
+    if (template.mode === 'AUDIOBOOK') {
+        content = <AudiobookEditor {...props} />;
+    } else if (template.mode === 'IMAGE_TO_VIDEO' || template.mode === 'UGC_PRODUCT') {
+        content = <ImageToVideoEditor {...props} />;
+    } else if (template.mode === 'FASHION_SHOOT' || template.mode === 'TEXT_TO_IMAGE' || template.mode === 'IMAGE_TO_IMAGE') {
+        content = <FashionShootEditor {...props} />;
+    } else if (template.mode === 'SHORTS' || template.mode === 'STORYBOOK') {
+        content = <ShortMakerEditor {...props} />;
+    } else {
+        // Default to Avatar for AVATAR mode
+        content = <AvatarEditor {...props} />;
+    }
 
     return (
         <div className="h-full flex flex-col p-4 md:p-6">

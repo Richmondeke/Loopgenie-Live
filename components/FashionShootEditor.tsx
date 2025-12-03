@@ -1,6 +1,6 @@
 
-import React, { useState, useRef } from 'react';
-import { Camera, Upload, Sparkles, Image as ImageIcon, Loader2, Download, RefreshCw, CheckCircle, X, ChevronRight, Layers } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Camera, Upload, Sparkles, Image as ImageIcon, Loader2, Download, RefreshCw, CheckCircle, X, ChevronRight, Layers, Wand2 } from 'lucide-react';
 import { Template } from '../types';
 import { analyzeProductImage, generateFashionImage } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
@@ -10,7 +10,7 @@ interface FashionShootEditorProps {
     onGenerate: (data: any) => Promise<void> | void;
     userCredits: number;
     template: Template;
-    isGenerating?: boolean; // Passed from parent if needed
+    isGenerating?: boolean;
 }
 
 const STYLES = [
@@ -21,8 +21,16 @@ const STYLES = [
     { id: 'cyber', label: 'Cyberpunk / Neon', prompt: 'neon lighting, cyberpunk aesthetic, futuristic fashion, night city, glowing accents, high contrast, 8k' },
 ];
 
-export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, onGenerate, userCredits }) => {
-    const [mode, setMode] = useState<'IMAGINE' | 'UPLOAD'>('IMAGINE');
+export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
+    const isFashionMode = template.mode === 'FASHION_SHOOT';
+    const isImgToImg = template.mode === 'IMAGE_TO_IMAGE';
+    const isTxtToImg = template.mode === 'TEXT_TO_IMAGE';
+    
+    // Default Mode Logic based on template type
+    const [mode, setMode] = useState<'IMAGINE' | 'UPLOAD'>(
+        isImgToImg ? 'UPLOAD' : 'IMAGINE'
+    );
+    
     const [prompt, setPrompt] = useState('');
     const [selectedStyle, setSelectedStyle] = useState(STYLES[0].id);
     const [quantity, setQuantity] = useState<1 | 2 | 4>(1);
@@ -59,25 +67,33 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
 
             // Step 1: Analyze if in Upload mode
             if (mode === 'UPLOAD' && uploadedImage) {
-                setStatusText("Analyzing product details...");
+                setStatusText("Analyzing image...");
                 const analysis = await analyzeProductImage(uploadedImage);
                 baseDescription = `${analysis}. ${prompt}`; // Combine analysis with user notes
             }
 
-            if (!baseDescription.trim()) {
-                throw new Error("Please enter a description or upload an image.");
+            if (!baseDescription.trim() && mode === 'IMAGINE') {
+                throw new Error("Please enter a description.");
             }
 
             // Step 2: Generate Images
-            setStatusText(`Shooting ${quantity} photos...`);
-            const stylePrompt = STYLES.find(s => s.id === selectedStyle)?.prompt || '';
-            const fullPrompt = `Fashion photography of ${baseDescription}. ${stylePrompt}`;
+            setStatusText(`Generating ${quantity} variations...`);
+            
+            // If strictly fashion mode, append style prompt. Otherwise rely more on user prompt.
+            let fullPrompt = baseDescription;
+            if (isFashionMode) {
+                const stylePrompt = STYLES.find(s => s.id === selectedStyle)?.prompt || '';
+                fullPrompt = `Fashion photography of ${baseDescription}. ${stylePrompt}`;
+            } else {
+                // General Mode: Just enhance quality slightly
+                fullPrompt = `${baseDescription}, 8k, highly detailed, photorealistic, cinematic lighting`;
+            }
 
             const promises = Array(quantity).fill(0).map(() => generateFashionImage(fullPrompt));
             const results = await Promise.all(promises);
 
             setGeneratedImages(results.filter(url => !!url));
-            setStatusText("Shoot complete!");
+            setStatusText("Generation complete!");
 
         } catch (error: any) {
             console.error(error);
@@ -90,25 +106,20 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
     const handleSaveSelected = async () => {
         if (selectedResults.length === 0) return;
         
-        // Save the first selected one as the "Main" project, others could be handled differently 
-        // but for simplicity we'll save the first one and maybe trigger multiple saves if the API supported it.
-        // For now, we save the FIRST selected image as the project result.
-        
         setIsProcessing(true);
         setStatusText("Saving to Gallery...");
 
         try {
             const mainImageUrl = generatedImages[selectedResults[0]];
-            // Upload to permanent storage
-            const permUrl = await uploadToStorage(mainImageUrl, `fashion_${Date.now()}.png`, 'fashion');
+            const permUrl = await uploadToStorage(mainImageUrl, `gen_${Date.now()}.png`, 'fashion');
             
             await onGenerate({
                 isDirectSave: true,
-                videoUrl: permUrl, // Storing image in videoUrl field for compatibility
+                videoUrl: permUrl,
                 thumbnailUrl: permUrl,
                 cost: totalCost,
-                type: 'FASHION_SHOOT',
-                templateName: `Fashion Shoot (${mode === 'UPLOAD' ? 'Product' : 'Concept'})`,
+                type: template.mode || 'TEXT_TO_IMAGE',
+                templateName: template.name,
                 shouldRedirect: true
             });
         } catch (e: any) {
@@ -125,6 +136,10 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
         }
     };
 
+    // Determine icon based on template type
+    const HeaderIcon = isFashionMode ? Camera : isImgToImg ? Layers : Wand2;
+    const headerColor = isFashionMode ? 'text-teal-500' : isImgToImg ? 'text-blue-500' : 'text-pink-500';
+
     return (
         <div className="h-full bg-white dark:bg-black text-gray-900 dark:text-white flex flex-col md:flex-row overflow-hidden">
             {/* LEFT PANEL: Controls */}
@@ -134,35 +149,40 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
                         <ChevronRight className="rotate-180" size={16} /> Back to Studio
                     </button>
                     <h2 className="text-2xl font-bold flex items-center gap-2">
-                        <Camera className="text-rose-500" /> Fashion Shoot
+                        <HeaderIcon className={headerColor} /> 
+                        {template.name}
                     </h2>
-                    <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">AI-powered professional photography.</p>
+                    <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+                        {isFashionMode ? 'AI-powered professional photography.' : 'Create stunning visuals with AI.'}
+                    </p>
                 </div>
 
                 <div className="p-6 space-y-8 flex-1">
-                    {/* Mode Selection */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Shoot Mode</label>
-                        <div className="grid grid-cols-2 gap-2 bg-gray-200 dark:bg-gray-800 p-1 rounded-xl">
-                            <button 
-                                onClick={() => setMode('IMAGINE')}
-                                className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'IMAGINE' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-                            >
-                                <Sparkles size={16} /> Imagine
-                            </button>
-                            <button 
-                                onClick={() => setMode('UPLOAD')}
-                                className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'UPLOAD' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
-                            >
-                                <Upload size={16} /> Upload
-                            </button>
+                    {/* Mode Selection - Only show if the tool supports multiple modes */}
+                    {!isImgToImg && !isTxtToImg && (
+                        <div>
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Generation Mode</label>
+                            <div className="grid grid-cols-2 gap-2 bg-gray-200 dark:bg-gray-800 p-1 rounded-xl">
+                                <button 
+                                    onClick={() => setMode('IMAGINE')}
+                                    className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'IMAGINE' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                                >
+                                    <Sparkles size={16} /> Text to Image
+                                </button>
+                                <button 
+                                    onClick={() => setMode('UPLOAD')}
+                                    className={`py-2.5 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${mode === 'UPLOAD' ? 'bg-white dark:bg-gray-700 shadow-sm text-indigo-600 dark:text-white' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'}`}
+                                >
+                                    <Upload size={16} /> Image to Image
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* Input Area */}
                     {mode === 'UPLOAD' ? (
                         <div className="animate-in fade-in slide-in-from-left-4 duration-300">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Product Image</label>
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Reference Image</label>
                             <div className={`relative border-2 border-dashed rounded-2xl h-48 flex flex-col items-center justify-center transition-all ${uploadedImage ? 'border-rose-500 bg-gray-900' : 'border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 bg-white dark:bg-gray-800'}`}>
                                 {uploadedImage ? (
                                     <>
@@ -178,58 +198,60 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
                                         <div className="w-12 h-12 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-3 text-gray-400">
                                             <ImageIcon size={24} />
                                         </div>
-                                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Click to upload product</span>
+                                        <span className="text-sm font-bold text-gray-700 dark:text-gray-300">Click to upload</span>
                                         <span className="text-xs text-gray-400 mt-1">Supported: JPG, PNG</span>
                                         <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
                                     </label>
                                 )}
                             </div>
                             <div className="mt-4">
-                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Additional Notes (Optional)</label>
+                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Instructions / Changes</label>
                                 <input 
                                     type="text" 
                                     value={prompt}
                                     onChange={(e) => setPrompt(e.target.value)}
-                                    placeholder="E.g. On a marble table, morning light..."
+                                    placeholder="E.g. Make it look like a oil painting..."
                                     className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-rose-500 outline-none" 
                                 />
                             </div>
                         </div>
                     ) : (
                         <div className="animate-in fade-in slide-in-from-right-4 duration-300">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Describe Outfit / Product</label>
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">{isFashionMode ? "Describe Outfit" : "Image Prompt"}</label>
                             <textarea 
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
-                                placeholder="E.g. A futuristic red leather jacket with neon accents..."
+                                placeholder={isFashionMode ? "E.g. A futuristic red leather jacket..." : "E.g. A cyberpunk city at night with neon rain..."}
                                 className="w-full h-40 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm focus:ring-2 focus:ring-rose-500 outline-none resize-none" 
                             />
                         </div>
                     )}
 
-                    {/* Styles */}
-                    <div>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Photography Style</label>
-                        <div className="grid grid-cols-1 gap-2">
-                            {STYLES.map(style => (
-                                <button
-                                    key={style.id}
-                                    onClick={() => setSelectedStyle(style.id)}
-                                    className={`px-4 py-3 rounded-xl text-left text-sm font-medium border transition-all ${
-                                        selectedStyle === style.id 
-                                        ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 text-rose-700 dark:text-rose-400' 
-                                        : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-rose-300'
-                                    }`}
-                                >
-                                    {style.label}
-                                </button>
-                            ))}
+                    {/* Styles - Only show in Fashion Mode */}
+                    {isFashionMode && (
+                        <div>
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Photography Style</label>
+                            <div className="grid grid-cols-1 gap-2">
+                                {STYLES.map(style => (
+                                    <button
+                                        key={style.id}
+                                        onClick={() => setSelectedStyle(style.id)}
+                                        className={`px-4 py-3 rounded-xl text-left text-sm font-medium border transition-all ${
+                                            selectedStyle === style.id 
+                                            ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 text-rose-700 dark:text-rose-400' 
+                                            : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-rose-300'
+                                        }`}
+                                    >
+                                        {style.label}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {/* Quantity */}
                     <div>
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Quantity</label>
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Variations</label>
                         <div className="flex gap-2">
                             {[1, 2, 4].map(num => (
                                 <button
@@ -261,8 +283,8 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
                             : 'bg-gradient-to-r from-rose-500 to-pink-600 text-white hover:scale-[1.02]'
                         }`}
                     >
-                        {isProcessing ? <Loader2 className="animate-spin" /> : <Camera />} 
-                        {isProcessing ? 'Shooting...' : 'Start Shoot'}
+                        {isProcessing ? <Loader2 className="animate-spin" /> : isFashionMode ? <Camera /> : <Wand2 />} 
+                        {isProcessing ? 'Generating...' : isFashionMode ? 'Start Shoot' : 'Generate'}
                     </button>
                 </div>
             </div>
@@ -276,20 +298,20 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
                         </div>
                         {isProcessing ? (
                             <>
-                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Photoshoot in Progress</h3>
+                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Creating Visuals</h3>
                                 <p className="text-sm">{statusText}</p>
                             </>
                         ) : (
                             <>
-                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Ready to Shoot</h3>
-                                <p className="text-sm">Configure your settings on the left and click "Start Shoot" to generate professional fashion imagery.</p>
+                                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Ready to Create</h3>
+                                <p className="text-sm">Configure your settings on the left and click "Generate" to see your results.</p>
                             </>
                         )}
                     </div>
                 ) : (
                     <div className="w-full max-w-5xl">
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Shoot Results</h3>
+                            <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Results</h3>
                             <div className="flex gap-3">
                                 <button 
                                     onClick={handleRunShoot}
@@ -328,7 +350,6 @@ export const FashionShootEditor: React.FC<FashionShootEditorProps> = ({ onBack, 
                                     }`}>
                                         <CheckCircle size={20} className={selectedResults.includes(idx) ? 'fill-current' : ''} />
                                     </div>
-                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
                                 </div>
                             ))}
                         </div>

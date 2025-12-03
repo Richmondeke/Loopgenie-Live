@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight } from 'lucide-react';
+import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight, Wand2, Smartphone, Video, Layers, Music } from 'lucide-react';
 import { Template, HeyGenAvatar } from '../types';
 import { getAvatars } from '../services/heygenService';
 
@@ -54,101 +54,97 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
       onSelectTemplate(template);
   };
 
-  // Tools Configuration with Categories
-  const QUICK_TOOLS = [
+  // --- BASIC TOOLS CONFIGURATION ---
+  const BASIC_TOOLS = [
     {
-        id: 'short_maker',
-        title: 'ShortMaker',
-        desc: 'Viral shorts in seconds',
-        icon: <Sparkles size={20} />,
+        id: 'audio_gen',
+        title: 'Generate Audio',
+        desc: 'Text to Speech (Audiobook)',
+        icon: <Headphones size={24} />,
+        color: 'bg-orange-500',
+        bg: 'bg-orange-50 dark:bg-orange-900/10',
+        text: 'text-orange-500',
+        onClick: () => onSelectTemplate({ id: 'audio', name: 'Generate Audio', thumbnailUrl: '', variables: [], mode: 'AUDIOBOOK', category: 'AI' })
+    },
+    {
+        id: 'text_to_image',
+        title: 'Text to Image',
+        desc: 'Generate AI Images',
+        icon: <Wand2 size={24} />,
         color: 'bg-pink-500',
-        text: 'text-pink-500',
         bg: 'bg-pink-50 dark:bg-pink-900/10',
-        onClick: () => onSelectTemplate({ id: 'shorts', name: 'ShortMaker', thumbnailUrl: '', variables: [], mode: 'SHORTS', category: 'AI' })
+        text: 'text-pink-500',
+        onClick: () => onSelectTemplate({ id: 'txt_img', name: 'Text to Image', thumbnailUrl: '', variables: [], mode: 'TEXT_TO_IMAGE', category: 'AI' })
+    },
+    {
+        id: 'image_to_image',
+        title: 'Image to Image',
+        desc: 'Remix & Style Transfer',
+        icon: <Layers size={24} />,
+        color: 'bg-blue-500',
+        bg: 'bg-blue-50 dark:bg-blue-900/10',
+        text: 'text-blue-500',
+        onClick: () => onSelectTemplate({ id: 'img_img', name: 'Image to Image', thumbnailUrl: '', variables: [], mode: 'IMAGE_TO_IMAGE', category: 'AI' })
+    },
+    {
+        id: 'image_to_video',
+        title: 'Image to Video',
+        desc: 'Animate Static Photos',
+        icon: <Video size={24} />,
+        color: 'bg-indigo-500',
+        bg: 'bg-indigo-50 dark:bg-indigo-900/10',
+        text: 'text-indigo-500',
+        onClick: () => onSelectTemplate({ id: 'img_vid', name: 'Image to Video', thumbnailUrl: '', variables: [], mode: 'IMAGE_TO_VIDEO', category: 'AI' })
+    },
+    {
+        id: 'avatar_gen',
+        title: 'Generate Avatar',
+        desc: 'Talking Head Video',
+        icon: <User size={24} />,
+        color: 'bg-purple-500',
+        bg: 'bg-purple-50 dark:bg-purple-900/10',
+        text: 'text-purple-500',
+        onClick: () => setView('AVATAR_SELECT')
+    }
+  ];
+
+  // --- MARKETING TOOLS CONFIGURATION ---
+  const MARKETING_TOOLS = [
+    {
+        id: 'shorts_maker',
+        title: 'Shorts Maker',
+        desc: 'Viral Vertical Videos',
+        icon: <Smartphone size={24} />,
+        color: 'bg-rose-500',
+        bg: 'bg-rose-50 dark:bg-rose-900/10',
+        text: 'text-rose-500',
+        isHot: true,
+        onClick: () => onSelectTemplate({ id: 'shorts', name: 'Shorts Maker', thumbnailUrl: '', variables: [], mode: 'SHORTS', category: 'AI' })
+    },
+    {
+        id: 'product_photoshoot',
+        title: 'Product Photoshoot',
+        desc: 'AI Fashion Photography',
+        icon: <Camera size={24} />,
+        color: 'bg-teal-500',
+        bg: 'bg-teal-50 dark:bg-teal-900/10',
+        text: 'text-teal-500',
+        onClick: () => onSelectTemplate({ id: 'fashion', name: 'Product Photoshoot', thumbnailUrl: '', variables: [], mode: 'FASHION_SHOOT', category: 'AI' })
     },
     {
         id: 'product_ugc',
         title: 'Product UGC',
-        desc: 'Video ads from photos',
-        icon: <ShoppingBag size={20} />,
-        color: 'bg-teal-500',
-        text: 'text-teal-500',
-        bg: 'bg-teal-50 dark:bg-teal-900/10',
+        desc: 'Video Ads from Photos',
+        icon: <ShoppingBag size={24} />,
+        color: 'bg-yellow-500',
+        bg: 'bg-yellow-50 dark:bg-yellow-900/10',
+        text: 'text-yellow-500',
         onClick: () => onSelectTemplate({ id: 'ugc', name: 'Product UGC', thumbnailUrl: '', variables: [], mode: 'UGC_PRODUCT', category: 'AI' })
-    },
-    {
-        id: 'ai_video',
-        title: 'AI Video',
-        desc: 'Text to Cinematic Video',
-        icon: <Clapperboard size={20} />,
-        color: 'bg-purple-500',
-        text: 'text-purple-500',
-        bg: 'bg-purple-50 dark:bg-purple-900/10',
-        onClick: () => onSelectTemplate({ id: 'txt_vid', name: 'AI Video', thumbnailUrl: '', variables: [], mode: 'TEXT_TO_VIDEO', category: 'AI' })
-    },
-    {
-        id: 'image_video',
-        title: 'Animate Image',
-        desc: 'Bring photos to life',
-        icon: <ImageIcon size={20} />,
-        color: 'bg-sky-500',
-        text: 'text-sky-500',
-        bg: 'bg-sky-50 dark:bg-sky-900/10',
-        onClick: () => onSelectTemplate({ id: 'img_vid', name: 'Image to Video', thumbnailUrl: '', variables: [], mode: 'IMAGE_TO_VIDEO', category: 'AI' })
     }
   ];
 
-  const STUDIO_TOOLS = [
-    {
-        id: 'avatar_video',
-        title: 'Avatar Video Studio',
-        description: 'Create professional spokesperson videos with premium HeyGen avatars.',
-        icon: <User size={24} />,
-        colorClass: 'text-indigo-600 dark:text-indigo-400',
-        bgClass: 'bg-indigo-50 dark:bg-indigo-900/20',
-        imgUrl: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&w=800&q=80',
-        onClick: () => setView('AVATAR_SELECT'),
-        cta: 'Select Avatar'
-    },
-    {
-        id: 'fashion_shoot',
-        title: 'Fashion Photoshoot',
-        description: 'Generate high-end model photography from flat-lay merchandise images.',
-        icon: <Camera size={24} />,
-        colorClass: 'text-rose-600 dark:text-rose-400',
-        bgClass: 'bg-rose-50 dark:bg-rose-900/20',
-        imgUrl: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=800&q=80',
-        onClick: () => onSelectTemplate({ id: 'fashion', name: 'Fashion Shoot', thumbnailUrl: '', variables: [], mode: 'FASHION_SHOOT', category: 'AI' }),
-        cta: 'Start Shoot'
-    },
-    {
-        id: 'storybook',
-        title: 'Storybook Video',
-        description: 'Create fully illustrated and narrated stories for kids or marketing.',
-        icon: <BookOpen size={24} />,
-        colorClass: 'text-amber-600 dark:text-amber-400',
-        bgClass: 'bg-amber-50 dark:bg-amber-900/20',
-        imgUrl: 'https://images.unsplash.com/photo-1532012197267-da84d127e765?auto=format&fit=crop&w=800&q=80',
-        onClick: () => onSelectTemplate({ id: 'story', name: 'Storybook', thumbnailUrl: '', variables: [], mode: 'STORYBOOK', category: 'AI' }),
-        cta: 'Write Story'
-    },
-    {
-        id: 'audiobook',
-        title: 'Audiobook Gen',
-        description: 'Convert text documents into emotive, human-like speech.',
-        icon: <Headphones size={24} />,
-        colorClass: 'text-orange-600 dark:text-orange-400',
-        bgClass: 'bg-orange-50 dark:bg-orange-900/20',
-        imgUrl: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?auto=format&fit=crop&w=800&q=80',
-        onClick: () => onSelectTemplate({ id: 'audio', name: 'Audiobook', thumbnailUrl: '', variables: [], mode: 'AUDIOBOOK', category: 'AI' }),
-        cta: 'Create Audio'
-    }
-  ];
-
-  const filteredStudioTools = STUDIO_TOOLS.filter(t => 
-    (t.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
-    (t.description || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredBasic = BASIC_TOOLS.filter(t => t.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  const filteredMarketing = MARKETING_TOOLS.filter(t => t.title.toLowerCase().includes(searchQuery.toLowerCase()));
 
   // AVATAR SELECTION VIEW
   if (view === 'AVATAR_SELECT') {
@@ -207,112 +203,93 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
 
   // MAIN DASHBOARD VIEW
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-8 no-scrollbar">
+    <div className="h-full overflow-y-auto p-4 md:p-8 no-scrollbar bg-gray-50 dark:bg-black">
         <div className="max-w-7xl mx-auto pb-10 space-y-10">
         
-        {/* Hero Banner */}
-        <div className="relative rounded-3xl overflow-hidden bg-gradient-to-r from-indigo-600 to-purple-700 dark:from-indigo-900 dark:to-purple-900 p-8 md:p-12 flex flex-col md:flex-row items-center justify-between shadow-2xl shadow-indigo-200 dark:shadow-none">
-            <div className="relative z-10 max-w-xl text-center md:text-left">
-                <h1 className="text-3xl md:text-4xl font-extrabold text-white mb-4 leading-tight">
-                    Welcome back{userProfile?.full_name ? `, ${userProfile.full_name.split(' ')[0]}` : ''}! <span className="inline-block animate-pulse">👋</span>
-                </h1>
-                <p className="text-indigo-100 text-lg mb-8">
-                    Ready to create something amazing today? Select a tool below to get started.
-                </p>
-                <div className="relative max-w-md mx-auto md:mx-0">
-                    <Search className="absolute left-4 top-3.5 text-indigo-300" size={20} />
-                    <input 
-                        type="text" 
-                        placeholder="Search for tools..." 
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-white/10 backdrop-blur-md border border-indigo-400/30 rounded-xl pl-12 pr-4 py-3 text-white placeholder-indigo-200 focus:outline-none focus:bg-white/20 focus:border-indigo-300 transition-all"
-                    />
-                </div>
+        {/* Header */}
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+            <div>
+                <h1 className="text-3xl font-extrabold text-gray-900 dark:text-white">Studio Dashboard</h1>
+                <p className="text-gray-500 dark:text-gray-400 mt-1">Select a tool to start creating.</p>
             </div>
-            <div className="hidden md:block relative z-10">
-                <div className="w-64 h-64 bg-white/10 rounded-full backdrop-blur-3xl absolute -top-10 -right-10 animate-blob" />
-                <div className="w-48 h-48 bg-purple-500/20 rounded-full backdrop-blur-3xl absolute bottom-0 left-0 animate-blob animation-delay-2000" />
-                <img 
-                    src="https://cdn3d.iconscout.com/3d/premium/thumb/video-editing-5481232-4569723.png" 
-                    alt="3D Illustration" 
-                    className="w-64 h-64 object-contain relative z-20 drop-shadow-2xl transform hover:scale-105 transition-transform duration-500" 
+            <div className="relative w-full md:w-80">
+                <Search className="absolute left-4 top-3.5 text-gray-400" size={18} />
+                <input 
+                    type="text" 
+                    placeholder="Search tools..." 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl pl-12 pr-4 py-3 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
                 />
-            </div>
-            {/* Abstract Background Shapes */}
-            <div className="absolute top-0 right-0 w-full h-full opacity-30 pointer-events-none">
-                <svg viewBox="0 0 100 100" className="w-full h-full fill-white/10">
-                    <circle cx="90" cy="10" r="40" />
-                    <circle cx="10" cy="90" r="30" />
-                </svg>
             </div>
         </div>
 
-        {/* Quick Access Tools */}
+        {/* Basic Tools */}
         <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                <Sparkles className="text-indigo-500" size={20} /> Quick Create
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <Sparkles className="text-indigo-500" size={18} /> Basic Tools
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-                {QUICK_TOOLS.map(tool => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                {filteredBasic.map(tool => (
                     <button 
                         key={tool.id} 
                         onClick={tool.onClick}
-                        className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-2xl flex flex-col items-start gap-3 hover:border-indigo-400 dark:hover:border-indigo-500 hover:scale-[1.02] hover:shadow-lg dark:hover:shadow-[0_0_15px_rgba(99,102,241,0.2)] transition-all duration-300 group text-left"
+                        className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 p-5 rounded-2xl flex flex-col items-center text-center gap-4 hover:border-indigo-400 dark:hover:border-indigo-500 hover:scale-[1.02] hover:shadow-lg dark:hover:shadow-[0_0_15px_rgba(99,102,241,0.2)] transition-all duration-300 group"
                     >
-                        <div className={`p-3 rounded-xl ${tool.bg} ${tool.text} group-hover:scale-110 transition-transform`}>
+                        <div className={`p-4 rounded-full ${tool.bg} ${tool.text} group-hover:scale-110 transition-transform shadow-sm`}>
                             {tool.icon}
                         </div>
                         <div>
-                            <div className="font-bold text-gray-900 dark:text-white">{tool.title}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400">{tool.desc}</div>
+                            <div className="font-bold text-gray-900 dark:text-white text-sm">{tool.title}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{tool.desc}</div>
                         </div>
                     </button>
                 ))}
             </div>
         </div>
 
-        {/* Main Studio Tools */}
+        {/* Marketing Tools */}
         <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6 flex items-center gap-2">
-                <Clapperboard className="text-indigo-500" size={20} /> Creative Studio
+            <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <Clapperboard className="text-rose-500" size={18} /> Marketing Tools
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredStudioTools.map(tool => (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {filteredMarketing.map(tool => (
                     <div 
                         key={tool.id}
                         onClick={tool.onClick}
-                        className="group bg-white dark:bg-gray-800 rounded-3xl border border-gray-200 dark:border-gray-700 overflow-hidden cursor-pointer hover:-translate-y-1 hover:shadow-xl dark:hover:shadow-[0_0_20px_rgba(79,70,229,0.15)] dark:hover:border-indigo-500/50 transition-all duration-300"
+                        className="group bg-white dark:bg-gray-900 rounded-3xl border border-gray-100 dark:border-gray-800 p-6 cursor-pointer hover:-translate-y-1 hover:shadow-xl dark:hover:shadow-[0_0_20px_rgba(244,63,94,0.15)] dark:hover:border-rose-500/30 transition-all duration-300 relative overflow-hidden"
                     >
-                        <div className="h-48 overflow-hidden relative">
-                            <img src={tool.imgUrl} alt={tool.title} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110 opacity-90 group-hover:opacity-100" />
-                            <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-                            <div className="absolute bottom-4 left-4 text-white">
-                                <div className={`w-10 h-10 ${tool.bgClass.replace('/10', '/90')} backdrop-blur-md rounded-xl flex items-center justify-center mb-3 shadow-lg`}>
-                                    {React.cloneElement(tool.icon as React.ReactElement, { className: 'text-white' })}
-                                </div>
+                        {tool.isHot && (
+                            <div className="absolute top-4 right-4 bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg animate-pulse">
+                                HOT
+                            </div>
+                        )}
+                        
+                        <div className="flex items-start justify-between mb-6">
+                            <div className={`w-14 h-14 ${tool.bg} rounded-2xl flex items-center justify-center ${tool.text}`}>
+                                {tool.icon}
+                            </div>
+                            <div className="bg-gray-50 dark:bg-gray-800 rounded-full p-2 group-hover:bg-indigo-50 dark:group-hover:bg-indigo-900/20 transition-colors">
+                                <ArrowRight size={16} className="text-gray-400 group-hover:text-indigo-500 transition-colors" />
                             </div>
                         </div>
-                        <div className="p-6">
-                            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{tool.title}</h3>
-                            <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-6 h-10 line-clamp-2">{tool.description}</p>
-                            <span className="inline-flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white group-hover:gap-3 transition-all">
-                                {tool.cta} <ArrowRight size={16} className="text-indigo-500" />
-                            </span>
-                        </div>
+                        
+                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{tool.title}</h3>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">{tool.desc}</p>
                     </div>
                 ))}
             </div>
         </div>
 
-        {/* Recent Activity Mini-Section */}
+        {/* Recent Activity */}
         {recentProjects.length > 0 && (
             <div>
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-6">Jump Back In</h2>
+                <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Recent Projects</h2>
                 <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
-                    {recentProjects.slice(0, 4).map((p, i) => (
-                        <div key={i} className="min-w-[200px] h-32 rounded-xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden relative group cursor-pointer hover:border-indigo-400 transition-colors">
-                            <img src={p.thumbnailUrl || 'https://via.placeholder.com/200x120'} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" alt="" />
+                    {recentProjects.slice(0, 5).map((p, i) => (
+                        <div key={i} className="min-w-[220px] h-36 rounded-2xl bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 overflow-hidden relative group cursor-pointer hover:border-indigo-400 transition-colors">
+                            <img src={p.thumbnailUrl || 'https://via.placeholder.com/200x120'} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity" alt="" />
                             <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/90 to-transparent">
                                 <p className="text-white text-xs font-bold truncate">{p.templateName}</p>
                                 <p className="text-gray-300 text-[10px]">{new Date(p.createdAt).toLocaleDateString()}</p>
