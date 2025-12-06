@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
@@ -14,7 +13,6 @@ interface ShortMakerEditorProps {
 }
 
 type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'COMPLETE';
-// Updated to include long formats
 type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
@@ -123,7 +121,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const addLog = (msg: string) => {
         setLogs(prev => [...prev, msg]);
         if (scrollRef.current) {
-            // Use setTimeout to allow render to happen before scrolling
             setTimeout(() => {
                 if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
             }, 50);
@@ -202,6 +199,51 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+    const generateImageWithRetry = async (
+        scene: any, 
+        globalSeed: string, 
+        style: string, 
+        aspectRatio: string, 
+        model: VisualModel
+    ) => {
+        let url = '';
+        let attempts = 0;
+        const maxAttempts = 3;
+
+        // Try Primary Model
+        while (!url && attempts < maxAttempts) {
+            try {
+                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model);
+            } catch (err: any) {
+                // Critical Fix: Fail fast on permission denied (403) or known persistent errors
+                if (err.status === 403 || err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
+                     console.warn(`Permission denied for ${model}, switching to fallback.`);
+                     break; 
+                }
+
+                attempts++;
+                const delay = attempts * 2000; // Exponential backoff
+                console.warn(`Scene ${scene.scene_number} retry ${attempts} (${model})...`);
+                await sleep(delay);
+            }
+        }
+
+        // Fallback to Flux if Gemini failed and it wasn't Flux already
+        if (!url && model !== 'flux') {
+            addLog(`⚠️ Scene ${scene.scene_number}: ${model} failed. Trying Flux fallback...`);
+            try {
+                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, 'flux');
+                if (url) addLog(`✅ Scene ${scene.scene_number}: Saved by Flux fallback.`);
+            } catch (err) {
+                console.error(`Fallback failed for scene ${scene.scene_number}`);
+            }
+        }
+
+        return url;
+    };
+
     const runProduction = async (resume: boolean = false) => {
         if (!idea.trim()) return;
         setIsProcessing(true);
@@ -228,7 +270,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 const isLongForm = ['5m', '10m', '20m'].includes(duration);
                 addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form mode active)' : ''}`);
                 
-                // If long form, this might take multiple steps internally in service
                 currentManifest = await generateStory({
                     idea,
                     seed: seed || undefined,
@@ -251,50 +292,39 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
             
-            // Count missing images
-            const missingImages = workingScenes.filter(s => !s.generated_image_url);
+            const missingScenes = workingScenes.filter(s => !s.generated_image_url);
             setTotalVisualsToGen(workingScenes.length);
-            setCompletedImages(workingScenes.length - missingImages.length);
+            setCompletedImages(workingScenes.length - missingScenes.length);
 
-            if (missingImages.length > 0) {
-                addLog(`🎨 Generating visuals (${missingImages.length} remaining)...`);
+            if (missingScenes.length > 0) {
+                addLog(`🎨 Generating visuals (${missingScenes.length} remaining)...`);
                 
-                // Process in batches of 3 to avoid rate limits but keep speed
-                const BATCH_SIZE = 3; 
+                // Process in small batches to respect rate limits but allow some concurrency
+                const BATCH_SIZE = 2;
                 
-                for (let i = 0; i < workingScenes.length; i+=1) {
-                    if (workingScenes[i].generated_image_url) continue;
-
-                    // Simple retry logic per image
-                    let url = '';
-                    let attempts = 0;
-                    while (!url && attempts < 3) {
-                        try {
-                            url = await generateSceneImage(
-                                workingScenes[i],
-                                generationSeed,
-                                style,
-                                aspectRatio,
-                                visualModel 
-                            );
-                            workingScenes[i].generated_image_url = url;
-                            
-                            // Update state immediately for progress & persistence
-                            setManifest({ ...currentManifest, scenes: [...workingScenes] });
-                            setCompletedImages(prev => prev + 1);
-                            
-                            // Small delay to be kind to APIs
-                            await new Promise(r => setTimeout(r, 500)); 
-                        } catch (err) {
-                            attempts++;
-                            console.warn(`Scene ${i+1} retry ${attempts}...`);
-                            await new Promise(r => setTimeout(r, 2000));
+                for (let i = 0; i < missingScenes.length; i += BATCH_SIZE) {
+                    const batch = missingScenes.slice(i, i + BATCH_SIZE);
+                    
+                    await Promise.all(batch.map(async (scene) => {
+                        const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
+                        
+                        const url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, visualModel);
+                        
+                        if (url) {
+                            workingScenes[idx].generated_image_url = url;
+                        } else {
+                            addLog(`❌ Scene ${scene.scene_number} failed all attempts. Using placeholder.`);
+                            workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Missing`;
                         }
-                    }
-                    if (!url) {
-                        addLog(`⚠️ Scene ${i+1} failed after 3 retries. Using placeholder.`);
-                        // Fallback to solid color or previous image to prevent total failure
-                        workingScenes[i].generated_image_url = 'https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+Missing'; 
+                        
+                        // Update state progressively
+                        setManifest(prev => prev ? ({ ...prev, scenes: [...workingScenes] }) : null);
+                        setCompletedImages(prev => prev + 1);
+                    }));
+                    
+                    // Delay between batches
+                    if (i + BATCH_SIZE < missingScenes.length) {
+                        await sleep(1000); 
                     }
                 }
             }
@@ -309,7 +339,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             if (!generatedAudioUrl) {
                 addLog(`🎙️ Synthesizing voiceover (${selectedVoice})...`);
-                // For long form, synthesizeAudio handles chunking internally
                 const elevenKey = localStorage.getItem('genavatar_eleven_key');
                 try {
                     const audioRes = await synthesizeAudio(
@@ -334,7 +363,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             } else {
                 addLog("🎬 Stitching video... (This may take a while for long videos)");
                 
-                // assembleVideo now handles chunking for long videos
                 const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
                 addLog("✅ Production Complete!");
@@ -349,7 +377,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         'stories'
                     );
                     
-                    // Try saving thumb
                     let thumbUrl = currentManifest.scenes[0]?.generated_image_url;
                     try {
                         if (thumbUrl) thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
@@ -365,7 +392,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         shouldRedirect: false
                     });
                     setIsSaved(true);
-                    localStorage.removeItem('shortmaker_draft'); // Clear draft on success
+                    localStorage.removeItem('shortmaker_draft');
                     addLog("💾 Saved to My Projects.");
                 } catch (saveError: any) {
                     console.error("Save error:", saveError);
@@ -476,9 +503,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         onChange={(e) => setVisualModel(e.target.value as VisualModel)}
                                         className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
                                     >
-                                        <option value="nano_banana">Nano Banana (Default, Fast)</option>
-                                        <option value="flux">Flux (Artistic)</option>
-                                        <option value="gemini_pro">Gemini 3 Pro (High Quality)</option>
+                                        <option value="nano_banana">Nano Banana (Fast)</option>
+                                        <option value="flux">Flux (Creative)</option>
+                                        <option value="gemini_pro">Gemini 3 Pro (HD)</option>
                                     </select>
                                 </div>
                                 <div>
@@ -576,53 +603,46 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 }`}>
                                     {bgMusic ? (
                                         <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3 overflow-hidden">
-                                                <div className="w-8 h-8 bg-green-900/50 rounded-full flex items-center justify-center text-green-400 flex-shrink-0">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center text-green-400">
                                                     <Music size={14} />
                                                 </div>
-                                                <div className="flex flex-col min-w-0">
-                                                    <span className="text-xs font-bold text-green-200 truncate max-w-[120px]">{bgMusicName}</span>
-                                                    <span className="text-[10px] text-green-400/70">Ready to mix</span>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="text-sm font-bold text-white truncate max-w-[150px]">{bgMusicName}</div>
+                                                    <div className="text-[10px] text-green-400">Ready to mix</div>
                                                 </div>
                                             </div>
                                             <button 
                                                 onClick={() => { setBgMusic(null); setBgMusicName(''); }}
-                                                className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-lg transition-colors"
+                                                className="p-1.5 text-gray-500 hover:text-red-400"
                                             >
                                                 <Trash2 size={14} />
                                             </button>
                                         </div>
                                     ) : (
-                                        <label className="flex flex-col items-center justify-center cursor-pointer py-3 group">
-                                            <Upload size={20} className="text-gray-500 group-hover:text-gray-300 mb-2 transition-colors" />
-                                            <span className="text-xs text-gray-400 font-medium group-hover:text-gray-200 transition-colors">Click to upload MP3 / WAV</span>
-                                            <span className="text-[10px] text-gray-600 mt-1">We'll duck volume automatically</span>
-                                            <input type="file" accept="audio/*" onChange={handleMusicUpload} className="hidden" />
+                                        <label className="cursor-pointer flex flex-col items-center justify-center gap-2 py-2">
+                                            <Upload size={20} className="text-gray-500" />
+                                            <span className="text-xs font-medium text-gray-400">Click to upload .mp3</span>
+                                            <input type="file" accept="audio/mp3,audio/wav" onChange={handleMusicUpload} className="hidden" />
                                         </label>
                                     )}
                                 </div>
                             </div>
 
-                            <div className="mt-auto pt-4 border-t border-gray-800">
-                                <div className="flex justify-between items-center mb-3 px-1">
-                                    <span className="text-xs font-medium text-gray-500">Estimated Cost</span>
-                                    <span className={`text-sm font-bold ${userCredits < COST ? 'text-red-400' : 'text-indigo-300'}`}>
-                                        {COST} Credits
-                                    </span>
-                                </div>
-                                <button
-                                    onClick={() => runProduction(false)}
-                                    disabled={!idea.trim() || userCredits < COST}
-                                    className={`w-full py-4 rounded-xl font-bold text-white shadow-lg flex items-center justify-center gap-2 transition-all transform active:scale-[0.98] ${
-                                        !idea.trim() || userCredits < COST
-                                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                                        : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 hover:shadow-indigo-500/25'
-                                    }`}
-                                >
-                                    <Wand2 size={18} />
-                                    <span>Generate Video</span>
-                                </button>
-                            </div>
+                            {/* GENERATE BUTTON */}
+                            <button
+                                onClick={() => runProduction(false)}
+                                disabled={!idea.trim() || userCredits < COST}
+                                className={`w-full py-4 rounded-xl font-bold text-lg flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl mt-auto relative overflow-hidden group ${
+                                    !idea.trim() || userCredits < COST
+                                    ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                                    : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:scale-[1.02]'
+                                }`}
+                            >
+                                <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500 skew-y-12" />
+                                <Wand2 size={20} className={!idea.trim() ? '' : 'animate-pulse'} />
+                                <span>Generate Video ({COST} credits)</span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -630,122 +650,106 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
-    // PRODUCTION VIEW
     return (
-        <div className="h-full bg-black text-white flex flex-col overflow-hidden">
-            <div className="h-16 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between px-6 flex-shrink-0 backdrop-blur-md">
-                <div className="flex items-center gap-4">
-                    <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white">
-                        <ChevronRight className="rotate-180" size={20} />
-                    </button>
-                    <h3 className="font-bold text-lg hidden md:block text-gray-200">
-                        {manifest?.title || 'Generating...'}
-                    </h3>
-                </div>
-                <div className="flex items-center gap-2">
-                    <StepIndicator current={step} target="SCRIPT" label="Script" icon={BookOpen} />
-                    <div className="w-4 h-px bg-gray-700" />
-                    <StepIndicator current={step} target="VISUALS" label="Visuals" icon={ImageIcon} />
-                    <div className="w-4 h-px bg-gray-700" />
-                    <StepIndicator current={step} target="AUDIO" label="Audio" icon={Music} />
-                    <div className="w-4 h-px bg-gray-700" />
-                    <StepIndicator current={step} target="ASSEMBLY" label="Output" icon={Film} />
-                </div>
-            </div>
-
-            <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-                <div className="flex-1 overflow-y-auto p-6 relative flex flex-col">
-                    {errorMsg && (
-                        <div className="mb-6 bg-red-900/20 border border-red-500/50 p-4 rounded-xl flex items-center gap-3 justify-between flex-wrap shrink-0">
-                            <div className="flex items-center gap-3">
-                                <AlertCircle className="text-red-400 flex-shrink-0" />
-                                <span className="text-red-200 text-sm break-all">{errorMsg}</span>
-                            </div>
-                            <div className="flex gap-2 mt-2 sm:mt-0">
-                                <button onClick={() => setStep('INPUT')} className="bg-gray-800 border border-gray-700 px-3 py-1 rounded text-xs hover:bg-gray-700 flex items-center gap-1"><Edit2 size={12} /> Edit</button>
-                                <button onClick={() => runProduction(true)} className="bg-red-800 px-3 py-1 rounded text-xs hover:bg-red-700 flex items-center gap-1"><RefreshCw size={12} /> Retry</button>
-                            </div>
+        <div className="h-full bg-black text-white flex flex-col md:flex-row overflow-hidden">
+             {/* Left Progress Panel */}
+             <div className="w-full md:w-[320px] bg-gray-900 border-r border-gray-800 flex flex-col z-20 shadow-xl">
+                 <div className="p-6 border-b border-gray-800 bg-gray-900">
+                     <div className="flex items-center gap-3 mb-2">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isProcessing ? 'bg-indigo-600 animate-pulse' : 'bg-green-600'}`}>
+                            {isProcessing ? <Loader2 className="animate-spin" /> : <CheckCircle />}
                         </div>
-                    )}
-
-                    {step === 'COMPLETE' && videoUrl ? (
-                        <div className="flex-1 flex flex-col items-center justify-center animate-in slide-in-from-top duration-500">
-                             <div className={`w-full max-w-4xl bg-black rounded-2xl overflow-hidden shadow-2xl border border-gray-800 relative group`} style={{ aspectRatio: aspectRatio.replace(':', '/') === '9/16' ? '9/16' : '16/9', maxHeight: '60vh' }}>
-                                <video src={videoUrl} controls autoPlay className="w-full h-full object-contain bg-black" />
-                             </div>
-                             <div className="flex justify-center mt-8 gap-4">
-                                <a href={videoUrl} download={`story-${Date.now()}.webm`} className="bg-gray-800 hover:bg-gray-700 text-white px-8 py-3 rounded-full font-bold flex items-center gap-2 shadow-lg transition-all"><Download size={20} /> Download</a>
-                                {isSaved && <div className="bg-green-600/20 text-green-400 border border-green-600/50 px-8 py-3 rounded-full font-bold flex items-center gap-2"><CheckCircle size={20} /> Saved</div>}
-                             </div>
+                        <div>
+                            <h2 className="font-bold text-lg leading-tight">{isProcessing ? 'Creating Magic' : 'Production Done'}</h2>
+                            <p className="text-xs text-gray-500">{isProcessing ? 'AI agents working...' : 'Ready to view'}</p>
                         </div>
-                    ) : (
-                         <div className="space-y-6 max-w-7xl mx-auto w-full">
-                            <div className="flex items-center justify-between">
-                                <h4 className="text-gray-400 text-sm font-bold uppercase tracking-wider flex items-center gap-2">
-                                    <Layout size={14} /> Live Storyboard
-                                </h4>
-                                {manifest?.generated_audio_url && step !== 'COMPLETE' && <div className="flex items-center gap-2 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded"><Volume2 size={12} /> Voiceover Ready</div>}
-                            </div>
-                            
-                            {/* Visual Progress Bar for Long-Form */}
-                            {totalVisualsToGen > 10 && (
-                                <div className="mb-4">
-                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                        <span>Generating Visuals ({completedImages}/{totalVisualsToGen})</span>
-                                        <span>{Math.round((completedImages / totalVisualsToGen) * 100)}%</span>
-                                    </div>
-                                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
-                                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${(completedImages / totalVisualsToGen) * 100}%` }}></div>
-                                    </div>
-                                </div>
-                            )}
+                     </div>
+                 </div>
 
-                            <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4`}>
-                                {manifest ? manifest.scenes.map((scene, idx) => (
-                                    <div key={idx} className={`bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col transition-all duration-500 ${scene.generated_image_url ? 'opacity-100 ring-1 ring-gray-700' : 'opacity-50 scale-95'}`}>
-                                        <div className="bg-black relative group" style={{ aspectRatio: aspectRatio.replace(':', '/') }}>
-                                            {scene.generated_image_url ? (
-                                                <img src={scene.generated_image_url} alt={`Scene ${idx+1}`} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
-                                            ) : (
-                                                <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                                                    {isProcessing && step === 'VISUALS' && !scene.generated_image_url ? <Loader2 className="animate-spin text-blue-500 mb-2" /> : <ImageIcon className="text-gray-700 mb-2" />}
-                                                    <span className="text-xs text-gray-600 text-center">Pending</span>
-                                                </div>
-                                            )}
-                                            <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] font-mono text-white">Scene {idx + 1}</div>
-                                        </div>
-                                        <div className="p-3 flex-1 bg-gray-900">
-                                            <p className="text-[11px] text-gray-400 leading-relaxed line-clamp-3">{scene.narration_text}</p>
-                                        </div>
-                                    </div>
-                                )) : (
-                                    // Skeletons
-                                    Array.from({ length: 4 }).map((_, i) => (
-                                        <div key={i} className="aspect-[9/16] bg-gray-800/50 rounded-xl animate-pulse" />
-                                    ))
-                                )}
-                            </div>
-                         </div>
-                    )}
-                </div>
-
-                {/* Logs Sidebar */}
-                <div className="w-full md:w-80 bg-[#0F0F0F] border-t md:border-t-0 md:border-l border-gray-800 flex flex-col font-mono text-xs shrink-0 h-48 md:h-auto">
-                    <div className="p-3 border-b border-gray-800 bg-[#151515] font-bold text-gray-400 flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${isProcessing ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`} />
-                        Production Log
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3" ref={scrollRef}>
-                        {logs.length === 0 && <div className="text-gray-600 italic text-center mt-10">Ready to start...</div>}
+                 <div className="flex-1 p-4 overflow-y-auto space-y-2 custom-scrollbar">
+                     <StepIndicator current={step} target="SCRIPT" label="Writing Script" icon={Edit2} />
+                     <StepIndicator current={step} target="VISUALS" label={`Generating Visuals (${completedImages}/${totalVisualsToGen})`} icon={ImageIcon} />
+                     <StepIndicator current={step} target="AUDIO" label="Synthesizing Voice" icon={Mic} />
+                     <StepIndicator current={step} target="ASSEMBLY" label="Stitching Video" icon={Film} />
+                     
+                     <div className="my-4 border-t border-gray-800" />
+                     
+                     <div className="space-y-1">
                         {logs.map((log, i) => (
-                            <div key={i} className="flex gap-2 animate-in fade-in slide-in-from-left-2 duration-300">
-                                <span className="text-gray-600 select-none">[{i+1}]</span>
-                                <span className={log.includes('❌') ? 'text-red-400' : log.includes('✅') ? 'text-green-400' : 'text-gray-300'}>{log}</span>
+                            <div key={i} className="text-[10px] font-mono text-gray-400 break-words leading-tight py-0.5 border-l-2 border-gray-700 pl-2">
+                                {log}
                             </div>
                         ))}
-                    </div>
-                </div>
-            </div>
+                        <div ref={scrollRef} />
+                     </div>
+                 </div>
+
+                 <div className="p-4 bg-gray-800 border-t border-gray-700">
+                     <button onClick={onBack} disabled={isProcessing} className="w-full py-3 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700 text-sm font-bold disabled:opacity-50">
+                         Cancel / Back
+                     </button>
+                 </div>
+             </div>
+
+             {/* Right Preview Panel */}
+             <div className="flex-1 bg-black relative flex flex-col items-center justify-center p-8">
+                 {/* Background Grid */}
+                 <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+
+                 {videoUrl ? (
+                     <div className="relative z-10 w-full max-w-sm md:max-w-md animate-in zoom-in duration-500">
+                         <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
+                             <video 
+                                src={videoUrl} 
+                                controls 
+                                autoPlay 
+                                loop 
+                                className="w-full h-auto max-h-[70vh] object-contain" 
+                             />
+                         </div>
+                         
+                         <div className="mt-6 flex flex-col gap-3">
+                             <a 
+                                href={videoUrl} 
+                                download="short_video.webm" 
+                                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all"
+                             >
+                                 <Download size={18} /> Download Video
+                             </a>
+                             <div className="flex gap-3">
+                                 <button onClick={() => runProduction(true)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
+                                     Regenerate
+                                 </button>
+                                 <button onClick={onBack} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
+                                     Start New
+                                 </button>
+                             </div>
+                             {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
+                         </div>
+                     </div>
+                 ) : (
+                     <div className="relative z-10 text-center max-w-md">
+                         {errorMsg ? (
+                             <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl">
+                                 <AlertCircle className="text-red-500 mx-auto mb-3" size={40} />
+                                 <h3 className="text-xl font-bold text-red-100 mb-2">Production Failed</h3>
+                                 <p className="text-red-300 text-sm mb-6">{errorMsg}</p>
+                                 <button onClick={() => runProduction(true)} className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm">
+                                     Retry
+                                 </button>
+                             </div>
+                         ) : (
+                             <div className="animate-pulse flex flex-col items-center">
+                                 <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
+                                     <Sparkles className="text-indigo-400" size={32} />
+                                 </div>
+                                 <h3 className="text-2xl font-bold text-white mb-2">Generating Video...</h3>
+                                 <p className="text-gray-400">Please wait while our AI agents write, direct, and edit your masterpiece.</p>
+                             </div>
+                         )}
+                     </div>
+                 )}
+             </div>
         </div>
     );
 };

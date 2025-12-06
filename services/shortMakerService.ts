@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames, concatenateVideos } from "./ffmpegService";
@@ -47,7 +46,18 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   
   // For short videos, we can do it in one go
   if (targetScenesTotal <= 15) {
-      return await generateStoryBatch(ai, req, targetScenesTotal, 1);
+      let attempts = 0;
+      while(attempts < 3) {
+          try {
+              return await generateStoryBatch(ai, req, targetScenesTotal, 1);
+          } catch(e) {
+              attempts++;
+              console.warn(`Single batch attempt ${attempts} failed`, e);
+              if(attempts >= 3) throw e;
+              await new Promise(r => setTimeout(r, 2000));
+          }
+      }
+      throw new Error("Failed to generate story after retries");
   }
 
   // For long videos (5m+), we generate in chunks to avoid context window issues and timeouts
@@ -75,20 +85,34 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       
       const context = i === 0 
         ? `This is the START of the video.` 
-        : `CONTINUATION. Previous scene ended with: "${allScenes[allScenes.length-1].narration_text}". Keep the story flowing.`;
+        : `CONTINUATION. Previous scene ended with: "${allScenes[allScenes.length-1]?.narration_text || ''}". Keep the story flowing.`;
       
-      try {
-        const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
-        
-        // Merge data
-        if (i === 0) {
-            baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
+      let batchSuccess = false;
+      let batchAttempts = 0;
+
+      while(!batchSuccess && batchAttempts < 3) {
+        try {
+            const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
+            
+            // Merge data
+            if (i === 0) {
+                baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
+            }
+            allScenes = [...allScenes, ...batchManifest.scenes];
+            batchSuccess = true;
+            
+        } catch (e) {
+            batchAttempts++;
+            console.error(`Batch ${i+1} attempt ${batchAttempts} failed`, e);
+            if (batchAttempts < 3) {
+                 await new Promise(r => setTimeout(r, 2000 * batchAttempts)); // Exponential backoff
+            }
         }
-        allScenes = [...allScenes, ...batchManifest.scenes];
-        
-      } catch (e) {
-          console.error(`Batch ${i+1} failed`, e);
-          // If a batch fails, we stop and return what we have to save partial progress
+      }
+
+      if (!batchSuccess) {
+          console.error(`Batch ${i+1} failed permanently. Stopping generation.`);
+          // We stop here but return what we have so the user doesn't lose everything
           break; 
       }
   }
@@ -286,8 +310,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     if (scenes.length === 0) throw new Error("No images generated to assemble video");
 
     // Chunking logic for video rendering
-    // Rendering 240 scenes in one go via Canvas can crash the browser.
-    // We break it into chunks of 15 scenes (~1 min), render them individually, then concat.
     const CHUNK_SIZE = 15;
     
     if (scenes.length <= CHUNK_SIZE) {
@@ -305,19 +327,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     // Long video: Chunk based approach
     console.log(`Starting chunked render for ${scenes.length} scenes...`);
     const videoChunks: string[] = [];
-    
-    // We need to split the audio too if it's one big file, which is hard without FFMPEG.
-    // However, `stitchVideoFrames` recalculates duration based on audio length.
-    // If we pass the full audio to every chunk, it will be wrong.
-    // FIX: We will rely on per-scene timing (approx 5s/scene) for chunks and ignore audio sync for strict lip-sync 
-    // (since ShortMaker is narration over bg, slight drift is okay, but ideally we'd slice audio).
-    // For MVP robustness: We will pass undefined audio to chunks and just use image timing, 
-    // THEN overlay the full audio at the very end if possible, OR accept that we lose audio sync in this mode without FFMPEG.
-    
-    // BETTER FIX: `synthesizeAudio` creates one big WAV. 
-    // We can't slice WAV client side easily without libs.
-    // Alternative: We generated audio separately. We can just play the full audio over the final concatenated video?
-    // `concatenateVideos` supports a background audio track. We can use the narration as the "background audio" for the final concat.
     
     for (let i = 0; i < scenes.length; i += CHUNK_SIZE) {
         const chunkScenes = scenes.slice(i, i + CHUNK_SIZE);
