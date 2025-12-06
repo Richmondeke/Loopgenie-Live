@@ -18,6 +18,7 @@ export interface GenerateStoryRequest {
   mode?: 'SHORTS' | 'STORYBOOK';
   durationTier?: '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
   aspectRatio?: '9:16' | '16:9' | '1:1' | '4:3';
+  onProgress?: (manifest: ShortMakerManifest) => void;
 }
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
@@ -49,7 +50,11 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       let attempts = 0;
       while(attempts < 3) {
           try {
-              return await generateStoryBatch(ai, req, targetScenesTotal, 1);
+              const result = await generateStoryBatch(ai, req, targetScenesTotal, 1);
+              // Fix numbering just in case
+              result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
+              if (req.onProgress) req.onProgress(result);
+              return result;
           } catch(e) {
               attempts++;
               console.warn(`Single batch attempt ${attempts} failed`, e);
@@ -100,7 +105,23 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
             if (i === 0) {
                 baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
             }
-            allScenes = [...allScenes, ...batchManifest.scenes];
+            
+            // Critical Fix: Force sequential numbering based on accumulation to prevent gaps or jumps
+            const normalizedScenes = batchManifest.scenes.map((s, idx) => ({
+                ...s,
+                scene_number: allScenes.length + idx + 1
+            }));
+
+            allScenes = [...allScenes, ...normalizedScenes];
+            
+            // Notify UI of progress so user sees scenes appearing
+            if (req.onProgress) {
+                req.onProgress({
+                    ...baseManifest,
+                    scenes: allScenes
+                });
+            }
+
             batchSuccess = true;
             
             // Artificial delay to prevent rate limits between batches

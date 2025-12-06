@@ -263,6 +263,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 const isLongForm = ['5m', '10m', '20m'].includes(duration);
                 addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form mode active)' : ''}`);
                 
+                // Real-time script generation using callback
                 currentManifest = await generateStory({
                     idea,
                     seed: seed || undefined,
@@ -271,7 +272,11 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     durationTier: duration,
                     aspectRatio: aspectRatio,
                     voice_preference: { voice: selectedVoice },
-                    scriptStyle: scriptStyle 
+                    scriptStyle: scriptStyle,
+                    onProgress: (partial) => {
+                        // Directly update state to show cards appearing in real-time
+                        setManifest(partial);
+                    }
                 });
                 
                 setManifest(currentManifest);
@@ -282,6 +287,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             // STEP 2: VISUALS
             setStep('VISUALS');
+            // We use a local reference to keep track of progress, but always push to state
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
             
@@ -300,7 +306,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
-                        
+                        if (idx === -1) return; // Should not happen
+
                         let url = '';
                         try {
                             url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel);
@@ -335,7 +342,11 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         }
                         
                         // Update state progressively so UI grid updates
-                        setManifest(prev => prev ? ({ ...prev, scenes: [...workingScenes] }) : null);
+                        // IMPORTANT: We must spread existing manifest to avoid overwriting unrelated props
+                        setManifest(prev => {
+                            if (!prev) return { ...currentManifest!, scenes: [...workingScenes] };
+                            return { ...prev, scenes: [...workingScenes] };
+                        });
                         setCompletedImages(prev => prev + 1);
                     }));
                     
@@ -346,6 +357,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 }
             }
             
+            // Final update to ensure consistency
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
             addLog("✅ All visuals generated.");
@@ -744,9 +756,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                              {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
                          </div>
                      </div>
-                 ) : manifest && !errorMsg ? (
-                    // Live Production View
-                    <div className="relative z-10 w-full max-w-4xl flex flex-col gap-6">
+                 ) : manifest ? (
+                    // Live Production View (Always show if manifest exists)
+                    <div className="relative z-10 w-full max-w-4xl flex flex-col gap-6 animate-in fade-in duration-500">
                         <div className="text-center mb-4">
                             <h2 className="text-2xl font-bold text-white mb-2">{manifest.title || "Untitled Story"}</h2>
                             <p className="text-gray-400 text-sm max-w-2xl mx-auto italic">"{manifest.final_caption || 'Generating content...'}"</p>
@@ -759,14 +771,18 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         {scene.generated_image_url ? (
                                             <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
                                         ) : (
-                                            <div className="absolute inset-0 flex items-center justify-center flex-col gap-2">
-                                                <Loader2 className="animate-spin text-gray-600" />
-                                                <span className="text-[10px] text-gray-500">Generating Scene {scene.scene_number}...</span>
+                                            <div className="absolute inset-0 flex items-center justify-center flex-col gap-2 p-2 text-center">
+                                                {idx < completedImages ? (
+                                                    <Loader2 className="animate-spin text-gray-600" />
+                                                ) : (
+                                                    <span className="text-xs text-gray-600 font-mono">Prompting...</span>
+                                                )}
+                                                <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene.image_prompt || `Generating Scene ${scene.scene_number}...`}</span>
                                             </div>
                                         )}
-                                        <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold">{scene.scene_number}</div>
+                                        <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene.scene_number}</div>
                                     </div>
-                                    <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto">
+                                    <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto border-t border-gray-800">
                                         {scene.narration_text}
                                     </div>
                                 </div>
