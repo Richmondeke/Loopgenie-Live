@@ -218,9 +218,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model);
             } catch (err: any) {
                 // Critical Fix: Fail fast on permission denied (403) or known persistent errors
-                if (err.status === 403 || err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
+                if (err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
                      console.warn(`Permission denied for ${model}, switching to fallback.`);
-                     break; 
+                     throw new Error('PERMISSION_DENIED');
                 }
 
                 attempts++;
@@ -230,17 +230,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             }
         }
 
-        // Fallback to Flux if Gemini failed and it wasn't Flux already
-        if (!url && model !== 'flux') {
-            addLog(`⚠️ Scene ${scene.scene_number}: ${model} failed. Trying Flux fallback...`);
-            try {
-                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, 'flux');
-                if (url) addLog(`✅ Scene ${scene.scene_number}: Saved by Flux fallback.`);
-            } catch (err) {
-                console.error(`Fallback failed for scene ${scene.scene_number}`);
-            }
-        }
-
+        // Return if successful, otherwise empty string (will trigger fallback logic in runProduction)
         return url;
     };
 
@@ -249,6 +239,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         setIsProcessing(true);
         setErrorMsg('');
         setIsSaved(false);
+
+        // Keep track of which model we are using to avoid checking permissions on every image
+        let currentVisualModel = visualModel;
 
         if (!resume) {
             setStep('SCRIPT');
@@ -308,7 +301,31 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
                         
-                        const url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, visualModel);
+                        let url = '';
+                        try {
+                            url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel);
+                        } catch (err: any) {
+                             if (err.message === 'PERMISSION_DENIED') {
+                                 // Auto-switch to Flux globally for this run
+                                 if (currentVisualModel !== 'flux') {
+                                    addLog(`⚠️ Permissions issue. Switching to Flux for all remaining images.`);
+                                    currentVisualModel = 'flux';
+                                 }
+                                 // Retry with Flux immediately
+                                 try {
+                                     url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
+                                 } catch(e) {}
+                             }
+                        }
+
+                        // Second layer fallback check
+                        if (!url && currentVisualModel !== 'flux') {
+                             // If basic retry failed but wasn't a perm error, try Flux just for this one image
+                             try {
+                                 url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
+                                 if (url) addLog(`✅ Scene ${scene.scene_number}: Saved by Flux fallback.`);
+                             } catch(e) {}
+                        }
                         
                         if (url) {
                             workingScenes[idx].generated_image_url = url;
@@ -317,7 +334,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Missing`;
                         }
                         
-                        // Update state progressively
+                        // Update state progressively so UI grid updates
                         setManifest(prev => prev ? ({ ...prev, scenes: [...workingScenes] }) : null);
                         setCompletedImages(prev => prev + 1);
                     }));
@@ -692,9 +709,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
              </div>
 
              {/* Right Preview Panel */}
-             <div className="flex-1 bg-black relative flex flex-col items-center justify-center p-8">
+             <div className="flex-1 bg-black relative flex flex-col items-center justify-center p-8 overflow-y-auto">
                  {/* Background Grid */}
-                 <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
+                 <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
                  {videoUrl ? (
                      <div className="relative z-10 w-full max-w-sm md:max-w-md animate-in zoom-in duration-500">
@@ -727,6 +744,35 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                              {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
                          </div>
                      </div>
+                 ) : manifest && !errorMsg ? (
+                    // Live Production View
+                    <div className="relative z-10 w-full max-w-4xl flex flex-col gap-6">
+                        <div className="text-center mb-4">
+                            <h2 className="text-2xl font-bold text-white mb-2">{manifest.title || "Untitled Story"}</h2>
+                            <p className="text-gray-400 text-sm max-w-2xl mx-auto italic">"{manifest.final_caption || 'Generating content...'}"</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            {manifest.scenes.map((scene, idx) => (
+                                <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+                                    <div className="aspect-[9/16] bg-gray-800 relative">
+                                        {scene.generated_image_url ? (
+                                            <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
+                                        ) : (
+                                            <div className="absolute inset-0 flex items-center justify-center flex-col gap-2">
+                                                <Loader2 className="animate-spin text-gray-600" />
+                                                <span className="text-[10px] text-gray-500">Generating Scene {scene.scene_number}...</span>
+                                            </div>
+                                        )}
+                                        <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold">{scene.scene_number}</div>
+                                    </div>
+                                    <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto">
+                                        {scene.narration_text}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
                  ) : (
                      <div className="relative z-10 text-center max-w-md">
                          {errorMsg ? (
@@ -743,8 +789,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                  <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
                                      <Sparkles className="text-indigo-400" size={32} />
                                  </div>
-                                 <h3 className="text-2xl font-bold text-white mb-2">Generating Video...</h3>
-                                 <p className="text-gray-400">Please wait while our AI agents write, direct, and edit your masterpiece.</p>
+                                 <h3 className="text-2xl font-bold text-white mb-2">Initializing Studio...</h3>
+                                 <p className="text-gray-400">Please wait while we set up your creative environment.</p>
                              </div>
                          )}
                      </div>

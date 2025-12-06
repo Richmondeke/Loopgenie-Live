@@ -63,7 +63,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   // For long videos (5m+), we generate in chunks to avoid context window issues and timeouts
   // We'll generate "Chapters" essentially.
   let allScenes: ShortMakerScene[] = [];
-  const batchSize = 10; 
+  // Reduced batch size to 5 to prevent RPC/Timeout errors on large payloads
+  const batchSize = 5; 
   const batches = Math.ceil(targetScenesTotal / batchSize);
   
   // Base Manifest Structure
@@ -90,8 +91,9 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       let batchSuccess = false;
       let batchAttempts = 0;
 
-      while(!batchSuccess && batchAttempts < 3) {
+      while(!batchSuccess && batchAttempts < 5) { // Increased retries to 5
         try {
+            console.log(`Generating batch ${i+1}/${batches}...`);
             const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
             
             // Merge data
@@ -101,11 +103,14 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
             allScenes = [...allScenes, ...batchManifest.scenes];
             batchSuccess = true;
             
+            // Artificial delay to prevent rate limits between batches
+            await new Promise(r => setTimeout(r, 1000));
+
         } catch (e) {
             batchAttempts++;
             console.error(`Batch ${i+1} attempt ${batchAttempts} failed`, e);
-            if (batchAttempts < 3) {
-                 await new Promise(r => setTimeout(r, 2000 * batchAttempts)); // Exponential backoff
+            if (batchAttempts < 5) {
+                 await new Promise(r => setTimeout(r, 3000 * batchAttempts)); // Exponential backoff
             }
         }
       }
@@ -254,6 +259,10 @@ export const generateSceneImage = async (
     } catch (e: any) {
         console.error(`Gemini Image Gen Error (${model}):`, e);
         if (e.status === 429) throw new Error("Daily AI quota exceeded (Image Generation).");
+        // Re-throw permission errors clearly so UI can handle them
+        if (e.status === 403 || e.message?.includes('PERMISSION_DENIED')) {
+            throw new Error("PERMISSION_DENIED");
+        }
         throw e;
     }
 };
