@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
@@ -14,11 +14,11 @@ interface ShortMakerEditorProps {
 }
 
 type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'COMPLETE';
-type DurationTier = '15s' | '30s' | '60s';
+// Updated to include long formats
+type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
 
-// Expanded Voice Config with Metadata
 const VOICES = [
     { id: 'Fenrir', label: 'Fenrir', gender: 'Male', tone: 'Deep, Epic', desc: 'Movie trailer voice' },
     { id: 'Kore', label: 'Kore', gender: 'Female', tone: 'Calm, Soothing', desc: 'Relaxing storybooks' },
@@ -34,6 +34,7 @@ const SCRIPT_STYLES = [
     { id: 'Funny', label: 'Funny / Witty', desc: 'Lighthearted, jokes, punchy.' },
     { id: 'Emotional', label: 'Emotional / Sad', desc: 'Touching, slow, meaningful.' },
     { id: 'Educational', label: 'Educational / Fact-Based', desc: 'Clear, concise, explanatory.' },
+    { id: 'Documentary', label: 'Mini-Documentary', desc: 'In-depth, structured storytelling.' },
 ];
 
 export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
@@ -61,21 +62,55 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [playingVoicePreview, setPlayingVoicePreview] = useState<string | null>(null);
     const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
-    // Progress
+    // Progress & Failsafes
     const [logs, setLogs] = useState<string[]>([]);
     const [completedImages, setCompletedImages] = useState<number>(0);
+    const [totalVisualsToGen, setTotalVisualsToGen] = useState<number>(0);
     const [isProcessing, setIsProcessing] = useState(false);
     const [errorMsg, setErrorMsg] = useState('');
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [isSaved, setIsSaved] = useState(false);
+    const [hasDraft, setHasDraft] = useState(false);
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // Initial Load - Check for drafts
+    useEffect(() => {
+        const savedDraft = localStorage.getItem('shortmaker_draft');
+        if (savedDraft) {
+            try {
+                const parsed = JSON.parse(savedDraft);
+                if (parsed && parsed.manifest) {
+                    setHasDraft(true);
+                }
+            } catch (e) {}
+        }
+    }, []);
+
+    // Auto-save draft on manifest change
+    useEffect(() => {
+        if (manifest) {
+            localStorage.setItem('shortmaker_draft', JSON.stringify({
+                manifest,
+                step,
+                duration,
+                idea,
+                videoUrl
+            }));
+        }
+    }, [manifest, step, videoUrl]);
+
     // Cost Calc
     const getCost = (d: DurationTier) => {
-        if(d === '15s') return APP_COSTS.SHORTS_15S;
-        if(d === '30s') return APP_COSTS.SHORTS_30S;
-        return APP_COSTS.SHORTS_60S;
+        switch(d) {
+            case '15s': return 5;
+            case '30s': return 9;
+            case '60s': return 16;
+            case '5m': return 60;
+            case '10m': return 100;
+            case '20m': return 180;
+            default: return 9;
+        }
     };
     const COST = getCost(duration);
 
@@ -88,15 +123,18 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const addLog = (msg: string) => {
         setLogs(prev => [...prev, msg]);
         if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            // Use setTimeout to allow render to happen before scrolling
+            setTimeout(() => {
+                if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }, 50);
         }
     };
 
     const handleMusicUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
-            if (file.size > 10 * 1024 * 1024) {
-                alert("File too large. Please upload an MP3 under 10MB.");
+            if (file.size > 15 * 1024 * 1024) {
+                alert("File too large. Please upload an MP3 under 15MB.");
                 return;
             }
             const reader = new FileReader();
@@ -136,6 +174,34 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
+    const restoreDraft = () => {
+        try {
+            const savedDraft = localStorage.getItem('shortmaker_draft');
+            if (savedDraft) {
+                const data = JSON.parse(savedDraft);
+                if (data.manifest) setManifest(data.manifest);
+                if (data.step) setStep(data.step);
+                if (data.duration) setDuration(data.duration);
+                if (data.idea) setIdea(data.idea);
+                if (data.videoUrl) setVideoUrl(data.videoUrl);
+                addLog("📂 Draft restored from local storage.");
+            }
+        } catch (e) {
+            console.error("Failed to restore draft", e);
+        }
+    };
+
+    const clearDraft = () => {
+        if(confirm("Are you sure? This will delete your current progress.")) {
+            localStorage.removeItem('shortmaker_draft');
+            setManifest(null);
+            setStep('INPUT');
+            setVideoUrl(null);
+            setLogs([]);
+            setHasDraft(false);
+        }
+    };
+
     const runProduction = async (resume: boolean = false) => {
         if (!idea.trim()) return;
         setIsProcessing(true);
@@ -148,6 +214,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             setCompletedImages(0);
             setManifest(null);
             setVideoUrl(null);
+            setTotalVisualsToGen(0);
         } else {
             addLog("🔄 Resuming production...");
         }
@@ -158,7 +225,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             if (!currentManifest) {
                 setStep('SCRIPT');
-                addLog(`🧠 Dreaming up ${scriptStyle} story...`);
+                const isLongForm = ['5m', '10m', '20m'].includes(duration);
+                addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form mode active)' : ''}`);
+                
+                // If long form, this might take multiple steps internally in service
                 currentManifest = await generateStory({
                     idea,
                     seed: seed || undefined,
@@ -169,8 +239,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     voice_preference: { voice: selectedVoice },
                     scriptStyle: scriptStyle 
                 });
+                
                 setManifest(currentManifest);
-                addLog(`✅ Script ready: "${currentManifest.title}"`);
+                addLog(`✅ Script ready: "${currentManifest.title}" with ${currentManifest.scenes.length} scenes.`);
             }
 
             if (!currentManifest) throw new Error("Failed to initialize story.");
@@ -179,48 +250,66 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             setStep('VISUALS');
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
-            const alreadyDoneCount = workingScenes.filter(s => !!s.generated_image_url).length;
-            setCompletedImages(alreadyDoneCount);
+            
+            // Count missing images
+            const missingImages = workingScenes.filter(s => !s.generated_image_url);
+            setTotalVisualsToGen(workingScenes.length);
+            setCompletedImages(workingScenes.length - missingImages.length);
 
-            if (alreadyDoneCount < workingScenes.length) {
-                addLog(`🎨 Generating visuals (${alreadyDoneCount}/${workingScenes.length} done)...`);
-            }
+            if (missingImages.length > 0) {
+                addLog(`🎨 Generating visuals (${missingImages.length} remaining)...`);
+                
+                // Process in batches of 3 to avoid rate limits but keep speed
+                const BATCH_SIZE = 3; 
+                
+                for (let i = 0; i < workingScenes.length; i+=1) {
+                    if (workingScenes[i].generated_image_url) continue;
 
-            for (let i = 0; i < workingScenes.length; i++) {
-                if (workingScenes[i].generated_image_url) continue;
-
-                addLog(`Painting Scene ${i + 1}...`);
-                let url = '';
-                let attempts = 0;
-                while (!url && attempts < 3) {
-                    try {
-                        url = await generateSceneImage(
-                            workingScenes[i],
-                            generationSeed,
-                            style,
-                            aspectRatio,
-                            visualModel 
-                        );
-                        workingScenes[i].generated_image_url = url;
-                        setManifest({ ...currentManifest, scenes: [...workingScenes] });
-                        setCompletedImages(prev => prev + 1);
-                    } catch (err) {
-                        attempts++;
-                        await new Promise(r => setTimeout(r, 2000));
+                    // Simple retry logic per image
+                    let url = '';
+                    let attempts = 0;
+                    while (!url && attempts < 3) {
+                        try {
+                            url = await generateSceneImage(
+                                workingScenes[i],
+                                generationSeed,
+                                style,
+                                aspectRatio,
+                                visualModel 
+                            );
+                            workingScenes[i].generated_image_url = url;
+                            
+                            // Update state immediately for progress & persistence
+                            setManifest({ ...currentManifest, scenes: [...workingScenes] });
+                            setCompletedImages(prev => prev + 1);
+                            
+                            // Small delay to be kind to APIs
+                            await new Promise(r => setTimeout(r, 500)); 
+                        } catch (err) {
+                            attempts++;
+                            console.warn(`Scene ${i+1} retry ${attempts}...`);
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                    }
+                    if (!url) {
+                        addLog(`⚠️ Scene ${i+1} failed after 3 retries. Using placeholder.`);
+                        // Fallback to solid color or previous image to prevent total failure
+                        workingScenes[i].generated_image_url = 'https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+Missing'; 
                     }
                 }
-                if (!url) throw new Error(`Failed to generate image for Scene ${i+1}`);
             }
             
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
+            addLog("✅ All visuals generated.");
 
             // STEP 3: AUDIO
             setStep('AUDIO');
             let generatedAudioUrl = currentManifest.generated_audio_url || '';
 
             if (!generatedAudioUrl) {
-                addLog(`🎙️ Recording voiceover (${selectedVoice})...`);
+                addLog(`🎙️ Synthesizing voiceover (${selectedVoice})...`);
+                // For long form, synthesizeAudio handles chunking internally
                 const elevenKey = localStorage.getItem('genavatar_eleven_key');
                 try {
                     const audioRes = await synthesizeAudio(
@@ -243,7 +332,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             if (resume && videoUrl) {
                  addLog("⏩ Video already built.");
             } else {
-                addLog("🎬 Stitching video & mixing background music...");
+                addLog("🎬 Stitching video... (This may take a while for long videos)");
+                
+                // assembleVideo now handles chunking for long videos
                 const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
                 addLog("✅ Production Complete!");
@@ -259,7 +350,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     );
                     
                     // Try saving thumb
-                    let thumbUrl = currentManifest.scenes[0].generated_image_url;
+                    let thumbUrl = currentManifest.scenes[0]?.generated_image_url;
                     try {
                         if (thumbUrl) thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
                     } catch(e) {}
@@ -269,11 +360,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         videoUrl: permanentVideoUrl, 
                         thumbnailUrl: thumbUrl,
                         cost: COST,
-                        templateName: currentManifest.title,
+                        templateName: currentManifest.title || 'Untitled Video',
                         type: isStorybook ? 'STORYBOOK' : 'SHORTS',
                         shouldRedirect: false
                     });
                     setIsSaved(true);
+                    localStorage.removeItem('shortmaker_draft'); // Clear draft on success
                     addLog("💾 Saved to My Projects.");
                 } catch (saveError: any) {
                     console.error("Save error:", saveError);
@@ -318,6 +410,17 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         </div>
                         <h2 className="text-3xl font-bold mb-1">{isStorybook ? 'Storybook Maker' : 'ShortMaker'}</h2>
                         <p className="text-gray-400 text-sm">Create {isStorybook ? 'illustrated stories' : 'viral shorts'} in seconds.</p>
+                        
+                        {hasDraft && (
+                             <div className="mt-4 flex justify-center gap-3">
+                                 <button onClick={restoreDraft} className="bg-indigo-900/50 text-indigo-300 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-indigo-900 border border-indigo-500/30">
+                                     <History size={16} /> Resume Draft
+                                 </button>
+                                 <button onClick={clearDraft} className="text-gray-500 hover:text-red-400 px-3 py-2 text-sm">
+                                     <Trash2 size={16} />
+                                 </button>
+                             </div>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
@@ -380,12 +483,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Duration</label>
-                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700">
-                                        {(['15s', '30s', '60s'] as DurationTier[]).map(t => (
+                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700 flex-wrap">
+                                        {(['15s', '30s', '60s', '5m', '10m', '20m'] as DurationTier[]).map(t => (
                                             <button
                                                 key={t}
                                                 onClick={() => setDuration(t)}
-                                                className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${
+                                                className={`flex-1 min-w-[30%] py-1.5 rounded-md text-[10px] font-bold transition-all ${
                                                     duration === t 
                                                     ? 'bg-gray-700 text-white shadow-sm' 
                                                     : 'text-gray-500 hover:text-gray-300'
@@ -527,7 +630,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
-    // PRODUCTION VIEW (Same as before but cleaned up)
+    // PRODUCTION VIEW
     return (
         <div className="h-full bg-black text-white flex flex-col overflow-hidden">
             <div className="h-16 border-b border-gray-800 bg-gray-900/50 flex items-center justify-between px-6 flex-shrink-0 backdrop-blur-md">
@@ -583,6 +686,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </h4>
                                 {manifest?.generated_audio_url && step !== 'COMPLETE' && <div className="flex items-center gap-2 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded"><Volume2 size={12} /> Voiceover Ready</div>}
                             </div>
+                            
+                            {/* Visual Progress Bar for Long-Form */}
+                            {totalVisualsToGen > 10 && (
+                                <div className="mb-4">
+                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                        <span>Generating Visuals ({completedImages}/{totalVisualsToGen})</span>
+                                        <span>{Math.round((completedImages / totalVisualsToGen) * 100)}%</span>
+                                    </div>
+                                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden">
+                                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${(completedImages / totalVisualsToGen) * 100}%` }}></div>
+                                    </div>
+                                </div>
+                            )}
+
                             <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4`}>
                                 {manifest ? manifest.scenes.map((scene, idx) => (
                                     <div key={idx} className={`bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col transition-all duration-500 ${scene.generated_image_url ? 'opacity-100 ring-1 ring-gray-700' : 'opacity-50 scale-95'}`}>
@@ -591,8 +708,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                                 <img src={scene.generated_image_url} alt={`Scene ${idx+1}`} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                                             ) : (
                                                 <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                                                    {isProcessing && step === 'VISUALS' && completedImages === idx ? <Loader2 className="animate-spin text-blue-500 mb-2" /> : <ImageIcon className="text-gray-700 mb-2" />}
-                                                    <span className="text-xs text-gray-600 text-center">{step === 'VISUALS' && completedImages === idx ? 'Painting...' : 'Pending'}</span>
+                                                    {isProcessing && step === 'VISUALS' && !scene.generated_image_url ? <Loader2 className="animate-spin text-blue-500 mb-2" /> : <ImageIcon className="text-gray-700 mb-2" />}
+                                                    <span className="text-xs text-gray-600 text-center">Pending</span>
                                                 </div>
                                             )}
                                             <div className="absolute top-2 left-2 bg-black/70 px-2 py-1 rounded text-[10px] font-mono text-white">Scene {idx + 1}</div>

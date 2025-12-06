@@ -130,10 +130,10 @@ export const stitchVideoFrames = async (
   console.log("Starting client-side video stitching...");
 
   return new Promise(async (resolve, reject) => {
-    // Safety timeout - Increased to 10 minutes (600,000ms)
+    // Safety timeout - Increased for long videos
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
-    }, 600000); 
+    }, 1200000); // 20 mins
 
     try {
         // 1. Prepare Canvas
@@ -266,21 +266,19 @@ export const stitchVideoFrames = async (
         // Animation Loop Variables
         const fps = 30;
         const framesPerScene = Math.ceil((durationPerImageMs / 1000) * fps);
-        const maxTotalFrames = (framesPerScene * scenes.length) + (fps * 2); // Hard limit: Duration + 2s buffer
+        const maxTotalFrames = (framesPerScene * scenes.length) + (fps * 2); // Buffer
         
         let currentSceneIdx = 0;
         let currentFrameInScene = 0;
         let totalFramesRendered = 0;
+        let startTime = performance.now();
         
         const drawFrame = () => {
-            // Safety: Stop if we exceed max expected frames (prevents 9-min infinite loop)
-            if (totalFramesRendered > maxTotalFrames) {
-                console.warn("Force stopping recorder: Exceeded expected duration.");
-                recorder.stop();
-                return;
-            }
+            // Robust loop check
+            if (recorder.state === 'inactive') return;
 
-            if (currentSceneIdx >= scenes.length) {
+            // Stop if done
+            if (currentSceneIdx >= scenes.length || totalFramesRendered > maxTotalFrames) {
                 recorder.stop();
                 return;
             }
@@ -337,75 +335,23 @@ export const stitchVideoFrames = async (
                 currentFrameInScene = 0;
             }
 
-            setTimeout(() => drawFrame(), 1000 / fps);
+            // High-precision timing loop
+            // Calculate when the next frame *should* be
+            const elapsed = performance.now() - startTime;
+            const targetTime = totalFramesRendered * (1000 / fps);
+            const delay = Math.max(0, targetTime - elapsed);
+            
+            setTimeout(() => requestAnimationFrame(drawFrame), delay);
         };
 
         // Start Loop
-        drawFrame();
+        requestAnimationFrame(drawFrame);
 
     } catch (err) {
         clearTimeout(timeoutId);
         reject(err);
     }
   });
-};
-
-/**
- * Merges a video URL with an audio URL.
- */
-export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promise<string> => {
-    return new Promise(async (resolve, reject) => {
-        try {
-            const video = await loadVideo(videoUrl);
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error("No ctx");
-
-            // Audio Setup
-            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            const audioContext = new AudioContextClass();
-            const response = await fetch(audioUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-            
-            const dest = audioContext.createMediaStreamDestination();
-            const sourceNode = audioContext.createBufferSource();
-            sourceNode.buffer = audioBuffer;
-            sourceNode.connect(dest);
-
-            const stream = canvas.captureStream(30);
-            const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
-            const combinedStream = new MediaStream(tracks);
-
-            const recorder = new MediaRecorder(combinedStream);
-            const chunks: Blob[] = [];
-            recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
-                resolve(URL.createObjectURL(blob));
-                audioContext.close();
-            };
-
-            recorder.start();
-            sourceNode.start(0);
-            await video.play();
-
-            const draw = () => {
-                if (video.paused || video.ended) {
-                    recorder.stop();
-                    return;
-                }
-                ctx.drawImage(video, 0, 0);
-                requestAnimationFrame(draw);
-            };
-            draw();
-
-        } catch (e) {
-            reject(e);
-        }
-    });
 };
 
 /**
@@ -419,6 +365,11 @@ export const concatenateVideos = async (
     backgroundAudioUrl?: string
 ): Promise<string> => {
     return new Promise(async (resolve, reject) => {
+        // Concatenating 20 mins can take time, set a safe timeout
+        const timeoutId = setTimeout(() => {
+            reject(new Error("Concatenation timed out."));
+        }, 1200000); 
+
         try {
             const canvas = document.createElement('canvas');
             canvas.width = width;
@@ -426,9 +377,10 @@ export const concatenateVideos = async (
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
 
-            // Optional Background Audio
+            // Optional Background Audio (Global Narration or Music)
             let audioContext: AudioContext | null = null;
             let dest: MediaStreamAudioDestinationNode | null = null;
+            let bgSource: AudioBufferSourceNode | null = null;
             
             if (backgroundAudioUrl) {
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -438,10 +390,10 @@ export const concatenateVideos = async (
                 const buffer = await audioContext.decodeAudioData(ab);
                 
                 dest = audioContext.createMediaStreamDestination();
-                const source = audioContext.createBufferSource();
-                source.buffer = buffer;
-                source.connect(dest);
-                source.start(0);
+                bgSource = audioContext.createBufferSource();
+                bgSource.buffer = buffer;
+                bgSource.connect(dest);
+                // Don't connect to speaker to avoid echo during render
             }
 
             const stream = canvas.captureStream(30);
@@ -454,51 +406,58 @@ export const concatenateVideos = async (
             
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
+                 clearTimeout(timeoutId);
                  const blob = new Blob(chunks, { type: 'video/webm' });
                  resolve(URL.createObjectURL(blob));
                  if (audioContext) audioContext.close();
             };
 
             recorder.start();
+            if (bgSource) bgSource.start(0);
 
             // Sequential Playback
             for (const url of videoUrls) {
-                const vid = await loadVideo(url);
-                await vid.play();
-                
-                // Safety: If video has no duration or is Infinite, use sane fallback
-                // This prevents hanging if 'ended' event doesn't fire
-                const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 15;
-
-                // Draw loop for this video
-                await new Promise<void>(res => {
-                    const startTime = Date.now();
+                try {
+                    const vid = await loadVideo(url);
+                    await vid.play();
                     
-                    const draw = () => {
-                        const elapsed = (Date.now() - startTime) / 1000;
+                    // Robust duration handling for infinite/NaN durations
+                    const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 10;
+                    
+                    await new Promise<void>((res) => {
+                        const draw = () => {
+                            if (vid.paused || vid.ended) {
+                                res();
+                                return;
+                            }
+                            
+                            // Draw full size cover
+                            ctx.drawImage(vid, 0, 0, width, height);
+                            requestAnimationFrame(draw);
+                        };
                         
-                        // Strict safety check: End if paused, ended, OR elapsed time > duration + 1s buffer
-                        if (vid.paused || vid.ended || elapsed > safeDuration + 1) {
+                        // Safety timeout per clip
+                        const safety = setTimeout(() => {
+                            if(!vid.paused) vid.pause();
+                            res(); 
+                        }, (safeDuration * 1000) + 2000); 
+
+                        draw();
+                        
+                        vid.onended = () => {
+                            clearTimeout(safety);
                             res();
-                            return;
-                        }
-                        
-                        // Draw fit cover
-                        const imgRatio = vid.videoWidth / vid.videoHeight;
-                        const canvasRatio = width / height;
-                        
-                        // To keep it simple for now: Draw full size
-                        ctx.drawImage(vid, 0, 0, width, height);
-                        
-                        requestAnimationFrame(draw);
-                    };
-                    draw();
-                });
+                        };
+                    });
+                } catch(err) {
+                    console.error("Skipping corrupted chunk", err);
+                }
             }
 
             recorder.stop();
 
         } catch (e) {
+            clearTimeout(timeoutId);
             reject(e);
         }
     });
@@ -551,5 +510,59 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
             draw();
 
         } catch(e) { reject(e); }
+    });
+};
+export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promise<string> => {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const video = await loadVideo(videoUrl);
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("No ctx");
+
+            // Audio Setup
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            const audioContext = new AudioContextClass();
+            const response = await fetch(audioUrl);
+            const arrayBuffer = await response.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            const dest = audioContext.createMediaStreamDestination();
+            const sourceNode = audioContext.createBufferSource();
+            sourceNode.buffer = audioBuffer;
+            sourceNode.connect(dest);
+
+            const stream = canvas.captureStream(30);
+            const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
+            const combinedStream = new MediaStream(tracks);
+
+            const recorder = new MediaRecorder(combinedStream);
+            const chunks: Blob[] = [];
+            recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                resolve(URL.createObjectURL(blob));
+                audioContext.close();
+            };
+
+            recorder.start();
+            sourceNode.start(0);
+            await video.play();
+
+            const draw = () => {
+                if (video.paused || video.ended) {
+                    recorder.stop();
+                    return;
+                }
+                ctx.drawImage(video, 0, 0);
+                requestAnimationFrame(draw);
+            };
+            draw();
+
+        } catch (e) {
+            reject(e);
+        }
     });
 };
