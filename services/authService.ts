@@ -1,4 +1,3 @@
-
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { UserProfile } from '../types';
 
@@ -36,7 +35,12 @@ export const getSession = async () => {
     const user = getMockUser();
     return { data: { session: user ? { user } : null }, error: null };
   }
-  return supabase.auth.getSession();
+  try {
+      return await supabase.auth.getSession();
+  } catch (error) {
+      console.warn("Error getting session:", error);
+      return { data: { session: null }, error };
+  }
 };
 
 export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {

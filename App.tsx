@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -65,10 +64,14 @@ const App: React.FC = () => {
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
 
   const loadProfile = async (userId: string) => {
-      const profile = await getUserProfile(userId);
-      if (profile) {
-          setUserProfile(profile);
-          setUserCredits(profile.credits_balance);
+      try {
+          const profile = await getUserProfile(userId);
+          if (profile) {
+              setUserProfile(profile);
+              setUserCredits(profile.credits_balance);
+          }
+      } catch (e) {
+          console.warn("Failed to load profile:", e);
       }
   };
 
@@ -89,16 +92,34 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+
+    // Failsafe: If Auth takes too long (e.g. Supabase unavailable), allow app to load in guest/landing state
+    const authTimeout = setTimeout(() => {
+        if (mounted && authLoading) {
+            console.warn("Auth check timed out. Forcing load.");
+            setAuthLoading(false);
+        }
+    }, 2500);
+
     getSession().then(({ data }) => {
+        if (!mounted) return;
         setSession(data.session);
         if (data.session?.user) {
             loadProfile(data.session.user.id);
         }
         setAuthLoading(false);
-    }).catch(() => setAuthLoading(false));
+        clearTimeout(authTimeout);
+    }).catch((e) => {
+        console.error("Auth check failed:", e);
+        if (mounted) setAuthLoading(false);
+        clearTimeout(authTimeout);
+    });
 
     const { data } = onAuthStateChange((event, session) => {
       console.log("Auth Event:", event);
+      if (!mounted) return;
+      
       if (event === 'PASSWORD_RECOVERY') {
           setIsRecoveryMode(true);
       }
@@ -107,10 +128,13 @@ const App: React.FC = () => {
         loadProfile(session.user.id);
         setAuthView(null);
       }
-      setAuthLoading(false);
+      // Ensure loading is cleared on auth change
+      setAuthLoading(false); 
     });
 
     return () => {
+        mounted = false;
+        clearTimeout(authTimeout);
         if (data && data.subscription) {
             data.subscription.unsubscribe();
         }
