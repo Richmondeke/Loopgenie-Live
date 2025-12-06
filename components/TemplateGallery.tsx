@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight, Wand2, Smartphone, Video, Layers, Music } from 'lucide-react';
-import { Template, HeyGenAvatar } from '../types';
+import { User, Loader2, ShoppingBag, Clapperboard, Sparkles, Headphones, Image as ImageIcon, BookOpen, Camera, Search, ArrowRight, Wand2, Smartphone, Video, Layers, Music, Trophy, Flame, Target, DollarSign, CheckCircle2, X } from 'lucide-react';
+import { Template, HeyGenAvatar, ClippingProject } from '../types';
 import { getAvatars } from '../services/heygenService';
 
 export interface TemplateGalleryProps {
@@ -14,12 +14,58 @@ export interface TemplateGalleryProps {
 
 type GalleryView = 'DASHBOARD' | 'AVATAR_SELECT';
 
+// Mock Clipping Campaigns
+const CLIPPING_PROJECTS: ClippingProject[] = [
+    {
+        id: 'cp_1',
+        title: 'Future Tech Review',
+        brand: 'TechDaily',
+        thumbnail: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2070&auto=format&fit=crop',
+        reward_pool: '$10,000',
+        payout_model: '$2.00 per 1k views',
+        category: 'Technology',
+        brief: 'Create a 30-second viral short discussing the potential of AI in daily life. Must be upbeat and futuristic.',
+        requirements: ['Use "Cyberpunk" visual style', 'Voice: Puck (Energetic)', 'Mention "AI Revolution" in script'],
+        recommended_voice: 'Puck',
+        recommended_style: 'Cyberpunk'
+    },
+    {
+        id: 'cp_2',
+        title: 'Summer Fashion Haul',
+        brand: 'VogueStyles',
+        thumbnail: 'https://images.unsplash.com/photo-1483985988355-763728e1935b?q=80&w=2070&auto=format&fit=crop',
+        reward_pool: '$5,000',
+        payout_model: '$1.50 per 1k views',
+        category: 'Fashion',
+        brief: 'Showcase trending summer outfits. Focus on bright colors and luxury aesthetics.',
+        requirements: ['Use "Luxury" visual style', 'Voice: Kore (Calm)', 'Format: 9:16 Vertical'],
+        recommended_voice: 'Kore',
+        recommended_style: 'Luxury'
+    },
+    {
+        id: 'cp_3',
+        title: 'Crypto Market Update',
+        brand: 'CoinBase Pro',
+        thumbnail: 'https://images.unsplash.com/photo-1518546305927-5a440bbabb91?q=80&w=2070&auto=format&fit=crop',
+        reward_pool: '$15,000',
+        payout_model: '$3.00 per 1k views',
+        category: 'Finance',
+        brief: 'Explain a recent crypto trend in simple terms. Keep it informative and trustworthy.',
+        requirements: ['Use "Corporate" visual style', 'Voice: Charon (Deep)', 'No financial advice disclaimer'],
+        recommended_voice: 'Charon',
+        recommended_style: 'Corporate'
+    }
+];
+
 export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTemplate, heyGenKey, initialView = 'DASHBOARD', userProfile, recentProjects = [] }) => {
   const [view, setView] = useState<GalleryView>(initialView);
   const [avatars, setAvatars] = useState<HeyGenAvatar[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [genderFilter, setGenderFilter] = useState<'ALL' | 'male' | 'female'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Clipping Project State
+  const [selectedCampaign, setSelectedCampaign] = useState<ClippingProject | null>(null);
 
   useEffect(() => {
     const fetchRealAvatars = async () => {
@@ -52,6 +98,24 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
           mode: 'AVATAR'
       };
       onSelectTemplate(template);
+  };
+
+  const handleStartCampaign = (campaign: ClippingProject) => {
+      // Create a template config based on the campaign to pre-fill the editor (conceptually)
+      // In a real app, we'd pass these params to the editor to pre-select dropdowns
+      const template: Template = {
+          id: `campaign_${campaign.id}`,
+          name: `Clip: ${campaign.title}`,
+          category: 'Campaign',
+          thumbnailUrl: campaign.thumbnail,
+          variables: [
+              { key: 'idea', label: 'Idea', type: 'textarea', defaultValue: campaign.brief },
+              { key: 'style', label: 'Style', type: 'text', defaultValue: campaign.recommended_style }
+          ],
+          mode: 'SHORTS'
+      };
+      onSelectTemplate(template);
+      setSelectedCampaign(null);
   };
 
   // --- BASIC TOOLS CONFIGURATION ---
@@ -178,7 +242,7 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
                     <p className="text-gray-500 dark:text-gray-400 animate-pulse">Loading avatars...</p>
                 </div>
             ) : (
-                <div className="flex-1 overflow-y-auto no-scrollbar pb-20">
+                <div className="flex-1 overflow-y-auto no-scrollbar pb-24">
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                         {filteredAvatars.map(avatar => (
                             <div key={avatar.id} onClick={() => handleSelectAvatar(avatar)} className="group bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden cursor-pointer hover:-translate-y-1 hover:shadow-xl dark:hover:shadow-[0_0_15px_rgba(99,102,241,0.3)] dark:hover:border-indigo-500 transition-all duration-300">
@@ -203,8 +267,9 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
 
   // MAIN DASHBOARD VIEW
   return (
+    <>
     <div className="h-full overflow-y-auto p-4 md:p-8 no-scrollbar bg-gray-50 dark:bg-black">
-        <div className="max-w-7xl mx-auto pb-10 space-y-10">
+        <div className="max-w-7xl mx-auto pb-24 space-y-10">
         
         {/* Header */}
         <div className="flex flex-col md:flex-row items-center justify-between gap-6">
@@ -221,6 +286,33 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl pl-12 pr-4 py-3 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
                 />
+            </div>
+        </div>
+
+        {/* Contest Banner */}
+        <div className="bg-gradient-to-r from-yellow-500 via-orange-500 to-red-500 rounded-3xl p-6 md:p-8 text-white relative overflow-hidden shadow-xl shadow-orange-500/20 group cursor-pointer hover:scale-[1.01] transition-transform">
+            <div className="absolute -right-10 -bottom-10 opacity-20 rotate-12 group-hover:rotate-6 transition-transform duration-700">
+                <Trophy size={240} />
+            </div>
+            <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+            
+            <div className="relative z-10">
+                <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider border border-white/30 mb-4 shadow-sm">
+                    <Flame size={12} className="text-yellow-200 fill-yellow-200" /> 
+                    Live Contest
+                </div>
+                <h2 className="text-3xl md:text-5xl font-black mb-4 tracking-tight drop-shadow-sm">
+                    Enter our Clipping Contest
+                </h2>
+                <p className="text-lg md:text-xl font-medium text-white/95 leading-relaxed mb-8 max-w-2xl drop-shadow-sm">
+                    For every <span className="font-extrabold bg-white/20 px-2 py-0.5 rounded-lg border border-white/20">1,000 views</span> you get with videos created on LoopGenie, we pay you <span className="font-extrabold text-yellow-100">$1</span>.
+                </p>
+                <button 
+                    onClick={() => onSelectTemplate({ id: 'shorts', name: 'Shorts Maker', thumbnailUrl: '', variables: [], mode: 'SHORTS', category: 'AI' })}
+                    className="bg-white text-orange-600 px-8 py-3.5 rounded-xl font-bold text-sm shadow-lg hover:bg-gray-50 hover:shadow-xl transition-all flex items-center gap-2 group-hover:gap-3"
+                >
+                    Start Creating Now <ArrowRight size={18} />
+                </button>
             </div>
         </div>
 
@@ -282,6 +374,41 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
             </div>
         </div>
 
+        {/* Active Clipping Campaigns Section */}
+        <div>
+             <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                <Target className="text-green-500" size={18} /> Active Campaigns (Clipping)
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {CLIPPING_PROJECTS.map(project => (
+                    <div 
+                        key={project.id}
+                        onClick={() => setSelectedCampaign(project)}
+                        className="bg-gray-900 rounded-3xl overflow-hidden relative group cursor-pointer border border-gray-800 hover:border-green-500/50 hover:shadow-2xl transition-all duration-300"
+                    >
+                        <div className="h-40 relative">
+                             <img src={project.thumbnail} className="w-full h-full object-cover opacity-60 group-hover:opacity-80 transition-opacity duration-500" />
+                             <div className="absolute inset-0 bg-gradient-to-t from-gray-900 to-transparent" />
+                             <div className="absolute top-4 left-4 bg-green-500 text-black text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide">
+                                {project.category}
+                             </div>
+                             <div className="absolute top-4 right-4 bg-black/60 text-white backdrop-blur-sm text-xs font-bold px-2 py-1 rounded-md flex items-center gap-1">
+                                <DollarSign size={12} className="text-green-400" />
+                                {project.payout_model}
+                             </div>
+                        </div>
+                        <div className="p-6 pt-2">
+                             <div className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1">{project.brand}</div>
+                             <h3 className="text-xl font-bold text-white mb-3 group-hover:text-green-400 transition-colors">{project.title}</h3>
+                             <div className="flex items-center gap-3 text-sm text-gray-400">
+                                 <span className="flex items-center gap-1"><Trophy size={14} className="text-yellow-500" /> Pool: {project.reward_pool}</span>
+                             </div>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+
         {/* Recent Activity */}
         {recentProjects.length > 0 && (
             <div>
@@ -301,5 +428,65 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         )}
         </div>
     </div>
+
+    {/* Campaign Details Modal */}
+    {selectedCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-2xl bg-gray-900 rounded-3xl border border-gray-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="relative h-48 flex-shrink-0">
+                    <img src={selectedCampaign.thumbnail} className="w-full h-full object-cover opacity-50" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-gray-900 to-transparent" />
+                    <button 
+                        onClick={() => setSelectedCampaign(null)}
+                        className="absolute top-4 right-4 p-2 bg-black/50 hover:bg-white/20 rounded-full text-white transition-colors backdrop-blur-md"
+                    >
+                        <X size={20} />
+                    </button>
+                    <div className="absolute bottom-6 left-6">
+                        <div className="text-green-400 text-xs font-bold uppercase tracking-wider mb-1 flex items-center gap-1">
+                            <Target size={14} /> {selectedCampaign.brand}
+                        </div>
+                        <h2 className="text-3xl font-black text-white">{selectedCampaign.title}</h2>
+                    </div>
+                </div>
+                
+                <div className="p-6 md:p-8 overflow-y-auto">
+                    <div className="flex flex-col md:flex-row gap-8 mb-8">
+                        <div className="flex-1">
+                            <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-2">The Brief</h3>
+                            <p className="text-gray-300 leading-relaxed">{selectedCampaign.brief}</p>
+                        </div>
+                        <div className="w-full md:w-48 flex-shrink-0 bg-gray-800 rounded-xl p-4 border border-gray-700">
+                             <h4 className="text-xs font-bold text-gray-500 uppercase mb-2">Payout Structure</h4>
+                             <div className="text-2xl font-bold text-white mb-1">{selectedCampaign.payout_model}</div>
+                             <div className="text-xs text-yellow-500 flex items-center gap-1">
+                                 <Trophy size={12} /> Pool: {selectedCampaign.reward_pool}
+                             </div>
+                        </div>
+                    </div>
+                    
+                    <div className="mb-8">
+                        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Requirements</h3>
+                        <ul className="space-y-3">
+                            {selectedCampaign.requirements.map((req, i) => (
+                                <li key={i} className="flex items-start gap-3 text-gray-300">
+                                    <CheckCircle2 size={18} className="text-green-500 mt-0.5 flex-shrink-0" />
+                                    <span>{req}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                    
+                    <button 
+                        onClick={() => handleStartCampaign(selectedCampaign)}
+                        className="w-full py-4 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold text-lg shadow-lg shadow-green-900/20 transition-all flex items-center justify-center gap-2 hover:scale-[1.01]"
+                    >
+                        <Clapperboard size={20} /> Start Creating Clip
+                    </button>
+                </div>
+            </div>
+        </div>
+    )}
+    </>
   );
 };

@@ -58,6 +58,20 @@ export interface Project {
   user_email?: string;
 }
 
+export interface ClippingProject {
+  id: string;
+  title: string;
+  brand: string;
+  thumbnail: string;
+  reward_pool: string;
+  payout_model: string; // e.g., "$1 per 1k views"
+  category: string;
+  brief: string;
+  requirements: string[];
+  recommended_voice?: string;
+  recommended_style?: string;
+}
+
 export interface HeyGenAvatar {
   id: string;
   name: string;
