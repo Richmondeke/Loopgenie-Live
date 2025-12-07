@@ -4,7 +4,12 @@ import { supabase } from "../supabaseClient";
 // Generic Helper to call the Edge Function
 export const invokeGemini = async (action: string, payload: any) => {
     // Inject API Key from Local Storage if available (User Override)
-    const userApiKey = localStorage.getItem('genavatar_gemini_key');
+    let userApiKey = localStorage.getItem('genavatar_gemini_key');
+    if (userApiKey && !userApiKey.trim()) {
+        userApiKey = null; // Treat whitespace/empty as null
+    } else if (userApiKey) {
+        userApiKey = userApiKey.trim();
+    }
 
     const { data, error } = await supabase.functions.invoke('gemini-api', {
         body: { 

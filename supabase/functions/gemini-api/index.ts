@@ -20,10 +20,19 @@ serve(async (req) => {
 
   try {
     const { action, payload } = await req.json();
-    console.log(`Processing action: ${action}`);
-
+    
     // 1. Resolve API Key (Client Override > Server Env)
-    const apiKey = payload?.apiKey || Deno.env.get('GEMINI_API');
+    let apiKey = payload?.apiKey;
+    let keySource = 'Client';
+
+    if (!apiKey || !apiKey.trim()) {
+        apiKey = Deno.env.get('GEMINI_API');
+        keySource = 'Server Env';
+    }
+
+    if (apiKey) apiKey = apiKey.trim();
+
+    console.log(`Processing action: ${action} | Auth Source: ${keySource} | Key Present: ${!!apiKey}`);
 
     if (!apiKey) {
       console.error("Missing GEMINI_API secret");
@@ -154,8 +163,15 @@ serve(async (req) => {
 
   } catch (error: any) {
     console.error("Edge Function Error:", error);
+    
+    // Enhance error message for common 401 case with Gemini
+    let errorMessage = error.message;
+    if (errorMessage.includes("API keys are not supported") || errorMessage.includes("CREDENTIALS_MISSING")) {
+        errorMessage = "Invalid API Key or Permissions. Please ensure your API key is valid and has access to Generative Language API.";
+    }
+
     // Explicitly return 500 but with CORS headers so client can read body
-    return new Response(JSON.stringify({ error: error.message, details: error.toString() }), {
+    return new Response(JSON.stringify({ error: errorMessage, details: error.toString() }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
