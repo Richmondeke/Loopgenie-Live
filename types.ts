@@ -96,7 +96,7 @@ export interface ScriptGenerationRequest {
 // --- ShortMaker Types ---
 
 export interface ShortMakerOutputSettings {
-  video_resolution: "1080x1920" | "1920x1080";
+  video_resolution: string; // Changed from strict union to string to support more ratios
   fps: number;
   scene_duration_default: number;
 }

@@ -93,8 +93,19 @@ const getTargetSceneCount = (duration: string): number => {
     return map[duration] || 6;
 };
 
+const resolveResolution = (aspectRatio: string): string => {
+    switch (aspectRatio) {
+        case '16:9': return "1920x1080";
+        case '9:16': return "1080x1920";
+        case '1:1': return "1080x1080";
+        case '4:3': return "1440x1080";
+        default: return "1080x1920";
+    }
+};
+
 export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMakerManifest> => {
   const targetScenesTotal = getTargetSceneCount(req.durationTier || '30s');
+  const targetResolution = resolveResolution(req.aspectRatio || (req.mode === 'STORYBOOK' ? '16:9' : '9:16'));
   
   jobStore.update({ status: 'SCRIPTING', totalImages: targetScenesTotal });
   jobStore.addLog(`Starting script generation for ${targetScenesTotal} scenes...`);
@@ -111,6 +122,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
               }
               // Fix numbering just in case
               result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
+              // Ensure resolution is set correctly in result if LLM didn't (or we force it)
+              result.output_settings.video_resolution = targetResolution;
               
               jobStore.update({ manifest: result });
               return result;
@@ -148,7 +161,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       final_caption: "",
       voice_instruction: { voice: "Fenrir", lang: "en", tone: "standard" },
       output_settings: { 
-          video_resolution: req.aspectRatio === '16:9' ? "1920x1080" : "1080x1920", 
+          video_resolution: targetResolution, 
           fps: 30, 
           scene_duration_default: 5 
       },
@@ -175,6 +188,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
 
             if (i === 0) {
                 baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
+                baseManifest.output_settings.video_resolution = targetResolution; // Force resolution
             }
             
             // Normalize numbering
@@ -373,9 +387,12 @@ export const generateSceneImage = async (
     }
 
     if (model === 'flux') {
+        // Updated resolution logic for Flux to match common aspect ratios
         let width = 720; let height = 1280;
         if (aspectRatio === '16:9') { width = 1280; height = 720; }
         if (aspectRatio === '1:1') { width = 1024; height = 1024; }
+        if (aspectRatio === '4:3') { width = 1024; height = 768; }
+        
         const sceneSeed = globalSeed + scene.scene_number; 
         return await generatePollinationsImage(fullPrompt, width, height, sceneSeed);
     }
@@ -462,6 +479,17 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     jobStore.update({ status: 'ASSEMBLING' });
     jobStore.addLog("Assembling final video...");
 
+    // Determine output dimensions from manifest resolution settings
+    let width = 1080;
+    let height = 1920;
+    if (manifest.output_settings && manifest.output_settings.video_resolution) {
+        const [w, h] = manifest.output_settings.video_resolution.split('x').map(Number);
+        if (!isNaN(w) && !isNaN(h)) {
+            width = w;
+            height = h;
+        }
+    }
+
     const CHUNK_SIZE = 15;
     
     if (scenes.length <= CHUNK_SIZE) {
@@ -469,8 +497,8 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
             scenes, 
             manifest.generated_audio_url, 
             undefined, 
-            undefined, 
-            undefined, 
+            width, // explicit width
+            height, // explicit height
             backgroundMusicUrl
         );
     }
@@ -482,7 +510,7 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         jobStore.addLog(`Rendering video chunk ${i/CHUNK_SIZE + 1}...`);
         
         try {
-            const chunkUrl = await stitchVideoFrames(chunkScenes, undefined, 5000); 
+            const chunkUrl = await stitchVideoFrames(chunkScenes, undefined, 5000, width, height); 
             videoChunks.push(chunkUrl);
         } catch (e) {
             console.error(`Chunk render failed`, e);
@@ -491,5 +519,5 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     }
 
     jobStore.addLog("Merging all video chunks...");
-    return await concatenateVideos(videoChunks, 1080, 1920, manifest.generated_audio_url);
+    return await concatenateVideos(videoChunks, width, height, manifest.generated_audio_url);
 };
