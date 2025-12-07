@@ -10,6 +10,7 @@ import { UpdatePassword } from './components/UpdatePassword';
 import { UpgradeModal } from './components/UpgradeModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Integrations } from './components/Integrations';
+import { Onboarding } from './components/Onboarding';
 import { AppView, Template, Project, ProjectStatus } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
 import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits } from './services/projectService';
@@ -28,6 +29,7 @@ const App: React.FC = () => {
   // Navigation State
   const [authView, setAuthView] = useState<'LOGIN' | 'SIGNUP' | null>(null);
   const [isRecoveryMode, setIsRecoveryMode] = useState(false);
+  const [isOnboarding, setIsOnboarding] = useState(false);
 
   const [currentView, setCurrentView] = useState<AppView>(AppView.TEMPLATES);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
@@ -107,6 +109,7 @@ const App: React.FC = () => {
         setSession(data.session);
         if (data.session?.user) {
             loadProfile(data.session.user.id);
+            checkOnboardingStatus(data.session.user.id);
         }
         setAuthLoading(false);
         clearTimeout(authTimeout);
@@ -126,6 +129,7 @@ const App: React.FC = () => {
       setSession(session);
       if (session?.user) {
         loadProfile(session.user.id);
+        checkOnboardingStatus(session.user.id);
         setAuthView(null);
       }
       // Ensure loading is cleared on auth change
@@ -140,6 +144,19 @@ const App: React.FC = () => {
         }
     };
   }, []);
+
+  const checkOnboardingStatus = (userId: string) => {
+      const onboardingKey = `loopgenie_onboarding_${userId}`;
+      const hasCompleted = localStorage.getItem(onboardingKey);
+      
+      // Also check if we already have a custom key saved
+      const savedKey = localStorage.getItem(STORAGE_KEY_HEYGEN);
+      const hasCustomKey = savedKey && savedKey !== DEFAULT_HEYGEN_API_KEY;
+
+      if (!hasCompleted && !hasCustomKey) {
+          setIsOnboarding(true);
+      }
+  };
 
   useEffect(() => {
     if (session && heyGenKey) {
@@ -209,6 +226,20 @@ const App: React.FC = () => {
       setProjects([]);
       setCurrentView(AppView.TEMPLATES);
       setAuthView(null);
+      setIsOnboarding(false);
+  };
+
+  const handleOnboardingComplete = (keys: { heyGen?: string }) => {
+      if (session?.user) {
+          const userId = session.user.id;
+          localStorage.setItem(`loopgenie_onboarding_${userId}`, 'true');
+      }
+
+      if (keys.heyGen) {
+          setHeyGenKey(keys.heyGen);
+          localStorage.setItem(STORAGE_KEY_HEYGEN, keys.heyGen);
+      }
+      setIsOnboarding(false);
   };
 
   const handleSelectTemplate = (template: Template) => {
@@ -240,7 +271,6 @@ const App: React.FC = () => {
         }
 
         let newProject: Project;
-        // Construct prefix based on type for persistence
         let idPrefix = 'ugc_';
         if (data.type === 'STORYBOOK') idPrefix = 'stor_';
         else if (data.type === 'SHORTS') idPrefix = 'short_';
@@ -407,6 +437,16 @@ const App: React.FC = () => {
       );
   }
 
+  // Show Onboarding if logged in and not completed
+  if (isOnboarding) {
+      return (
+          <Onboarding 
+            onComplete={handleOnboardingComplete} 
+            onSkip={() => handleOnboardingComplete({})} 
+          />
+      );
+  }
+
   return (
     <div className="flex h-screen bg-background dark:bg-gray-900 relative transition-colors duration-200">
       <Sidebar 
@@ -437,7 +477,6 @@ const App: React.FC = () => {
              </button>
         </header>
         
-        {/* Error Banner for DB Issues */}
         {dbError && (
             <div className="bg-red-600 text-white p-3 text-sm font-bold flex items-center justify-between shadow-md z-50">
                 <div className="flex items-center gap-2">
@@ -448,7 +487,6 @@ const App: React.FC = () => {
             </div>
         )}
 
-        {/* Main Content Area - Updated to allow children to control scroll */}
         <div className="flex-1 relative h-full w-full">
             {renderContent()}
         </div>

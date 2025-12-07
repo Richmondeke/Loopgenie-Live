@@ -148,7 +148,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 }));
             } catch (e) {
                 console.warn("Failed to save draft to localStorage (likely quota exceeded). Ignoring.", e);
-                // Optional: Clear old drafts if space is needed, but for now just ignoring prevents crash.
             }
         }
     }, [manifest, step, duration, idea]);
@@ -234,11 +233,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 const data = JSON.parse(savedDraft);
                 if (data.manifest) {
                     setManifest(data.manifest);
-                    // If we restored a manifest without images (stripped), we need to regenerate visuals
-                    // We detect this by checking if scenes exist but lack URLs
                     const needsRegen = data.manifest.scenes.some((s: any) => !s.generated_image_url);
                     if (needsRegen) {
-                        setStep('SCRIPT'); // Go back to script/visuals step
+                        setStep('SCRIPT'); 
                         addLog("📂 Draft restored. Visuals need regeneration (images are not saved in drafts).");
                     } else {
                         addLog("📂 Draft restored.");
@@ -303,7 +300,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         setErrorMsg('');
         setIsSaved(false);
         
-        // Reset store if starting fresh
         if (!resume) jobStore.reset();
 
         let currentVisualModel = visualModel;
@@ -352,9 +348,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
             
-            const missingScenes = workingScenes.filter(s => !s.generated_image_url);
+            // Failsafe: Filter out already generated scenes
+            const missingScenes = workingScenes.filter(s => !s.generated_image_url || s.generated_image_url.includes('placeholder'));
             
-            // Sync with Store
             jobStore.update({ 
                 manifest: currentManifest, 
                 totalImages: workingScenes.length,
@@ -373,8 +369,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
-                        
-                        if (idx === -1) return; // Defensive check
+                        if (idx === -1) return; 
 
                         let url = '';
                         try {
@@ -382,31 +377,23 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         } catch (err: any) {
                              if (err.message === 'PERMISSION_DENIED') {
                                  if (currentVisualModel !== 'flux') {
-                                    addLog(`⚠️ Permissions issue. Switching to Flux for all remaining images.`);
+                                    addLog(`⚠️ Permissions issue. Switching to Flux for subsequent images.`);
                                     currentVisualModel = 'flux';
                                  }
+                                 // Immediate retry with Flux for this scene to save time
                                  try {
                                      url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
                                  } catch(e) {}
                              }
                         }
 
-                        if (!url && currentVisualModel !== 'flux') {
-                             try {
-                                 url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
-                                 if (url) addLog(`✅ Scene ${scene.scene_number}: Saved by Flux fallback.`);
-                             } catch(e) {}
-                        }
-                        
                         if (url) {
                             workingScenes[idx].generated_image_url = url;
-                        } else {
-                            addLog(`❌ Scene ${scene.scene_number} failed all attempts. Using placeholder.`);
-                            workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Missing`;
-                        }
+                        } 
+                        // If failed, we leave as null/undefined to catch in the Rescue Phase
                         
                         // Update Store incrementally
-                        const currentCount = jobStore.completedImages + 1;
+                        const currentCount = workingScenes.filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder')).length;
                         jobStore.update({
                             manifest: { ...currentManifest!, scenes: [...workingScenes] },
                             completedImages: currentCount
@@ -418,10 +405,44 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     }
                 }
             }
+
+            // --- RESCUE PHASE ---
+            const failedScenes = workingScenes.filter(s => !s.generated_image_url);
+            if (failedScenes.length > 0) {
+                addLog(`⚠️ ${failedScenes.length} scenes missed in first pass. Entering rescue mode...`);
+                
+                for (const scene of failedScenes) {
+                    const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
+                    if (idx === -1) continue;
+
+                    addLog(`⛑️ Rescuing Scene ${scene.scene_number} with fallback...`);
+                    try {
+                        // Force Flux for rescue as it is usually more robust for fallback
+                        const url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
+                        if (url) {
+                            workingScenes[idx].generated_image_url = url;
+                            addLog(`✅ Scene ${scene.scene_number} rescued.`);
+                        } else {
+                            throw new Error("Rescue failed");
+                        }
+                    } catch (e) {
+                        console.error(`Rescue failed for scene ${scene.scene_number}`, e);
+                        workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Failed`;
+                        addLog(`❌ Scene ${scene.scene_number} permanently failed.`);
+                    }
+                    
+                    jobStore.update({
+                        manifest: { ...currentManifest!, scenes: [...workingScenes] },
+                        completedImages: workingScenes.filter(s => !!s.generated_image_url).length
+                    });
+                    
+                    await sleep(1500); 
+                }
+            }
             
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
-            addLog("✅ All visuals generated.");
+            addLog("✅ Visual generation phase complete.");
 
             // STEP 3: AUDIO
             setStep('AUDIO');
@@ -473,7 +494,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     
                     let thumbUrl = currentManifest.scenes[0]?.generated_image_url;
                     try {
-                        if (thumbUrl) thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
+                        if (thumbUrl && thumbUrl.startsWith('data:')) {
+                             // Upload thumbnail if it's base64, otherwise keep as is
+                             thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
+                        }
                     } catch(e) {}
 
                     await onGenerate({
@@ -523,7 +547,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     };
 
     // --- SAFE RENDERING HELPER ---
-    // Filters out corrupted scenes to prevent React crashes
     const getSafeScenes = (rawScenes: any[]) => {
         if (!Array.isArray(rawScenes)) return [];
         return rawScenes.filter(s => !!s && typeof s === 'object');

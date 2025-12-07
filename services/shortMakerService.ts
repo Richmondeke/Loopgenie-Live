@@ -315,7 +315,15 @@ export const generateSceneImage = async (
     const characterAnchor = scene.character_tokens.length > 0 ? `Consistent character features: ${scene.character_tokens.join(', ')}` : '';
     const envAnchor = scene.environment_tokens.length > 0 ? `in ${scene.environment_tokens.join(', ')}` : '';
 
-    let fullPrompt = `(${style} style), ${scene.image_prompt}, ${characterAnchor}, ${envAnchor}`;
+    // FAILSAFE: Ensure prompt is not empty or malformed
+    let basePrompt = scene.image_prompt;
+    if (!basePrompt || basePrompt.trim().length < 5) {
+        basePrompt = scene.visual_description || scene.narration_text || "A cinematic scene";
+    }
+    // Truncate to prevent token limit crashes (though Gemini allows large context, safety first)
+    if (basePrompt.length > 1500) basePrompt = basePrompt.substring(0, 1500);
+
+    let fullPrompt = `(${style} style), ${basePrompt}, ${characterAnchor}, ${envAnchor}`;
 
     if (style.toLowerCase().includes('photo') || style.toLowerCase().includes('cinematic')) {
         fullPrompt += `, photorealistic, 8k uhd, cinematic lighting, sharp focus, masterpiece`;
@@ -399,12 +407,12 @@ export const synthesizeAudio = async (
 };
 
 export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusicUrl?: string): Promise<string> => {
-    const scenes = manifest.scenes.filter(s => !!s.generated_image_url).map(s => ({
+    const scenes = manifest.scenes.filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder')).map(s => ({
         imageUrl: s.generated_image_url as string,
         text: s.narration_text || ""
     }));
 
-    if (scenes.length === 0) throw new Error("No images generated to assemble video");
+    if (scenes.length === 0) throw new Error("No valid images generated to assemble video");
 
     jobStore.update({ status: 'ASSEMBLING' });
     jobStore.addLog("Assembling final video...");
