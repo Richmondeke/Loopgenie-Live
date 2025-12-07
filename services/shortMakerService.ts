@@ -123,7 +123,12 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
               // Fix numbering just in case
               result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
               // Ensure resolution is set correctly in result if LLM didn't (or we force it)
-              result.output_settings.video_resolution = targetResolution;
+              result.output_settings = {
+                  ...(result.output_settings || {}),
+                  video_resolution: targetResolution,
+                  fps: 30,
+                  scene_duration_default: 5
+              };
               
               jobStore.update({ manifest: result });
               return result;
@@ -187,8 +192,17 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
             if (!batchManifest.scenes) batchManifest.scenes = [];
 
             if (i === 0) {
-                baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
-                baseManifest.output_settings.video_resolution = targetResolution; // Force resolution
+                // Initialize Base Manifest with strict resolution control
+                baseManifest = { 
+                    ...batchManifest, 
+                    scenes: [],
+                    output_settings: {
+                        ...(batchManifest.output_settings || {}),
+                        video_resolution: targetResolution, // STRICT FORCE
+                        fps: 30,
+                        scene_duration_default: 5
+                    }
+                };
             }
             
             // Normalize numbering

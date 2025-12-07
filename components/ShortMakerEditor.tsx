@@ -72,6 +72,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // --- EFFECT: Reset Aspect Ratio on Template Change ---
+    useEffect(() => {
+        setAspectRatio(template.mode === 'STORYBOOK' ? '16:9' : '9:16');
+        setStyle(template.mode === 'STORYBOOK' ? 'Watercolor Illustration' : 'Cinematic');
+    }, [template.mode]);
+
     // --- EFFECT: SYNC WITH JOB STORE ---
     useEffect(() => {
         // 1. Initial State Load from Background Store
