@@ -116,7 +116,12 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
               return result;
           } catch(e: any) {
               // FATAL ERROR CHECK
-              const msg = e.message?.toLowerCase() || "";
+              const msg = (e.message || JSON.stringify(e)).toLowerCase();
+              if (msg.includes("referer") || msg.includes("referrer")) {
+                  const errorMsg = "API Key Configuration Error: Your Google API Key has 'HTTP Referrer' restrictions. Edge Functions cannot provide a referrer. Please go to Google Cloud Console and remove the restriction (set to None).";
+                  jobStore.addLog(`❌ ${errorMsg}`);
+                  throw new Error(errorMsg);
+              }
               if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
                   jobStore.addLog(`❌ Fatal Error: ${e.message}`);
                   throw e; // Do not retry fatal errors
@@ -196,7 +201,14 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
 
         } catch (e: any) {
             // FATAL ERROR CHECK
-            const msg = e.message?.toLowerCase() || "";
+            const msg = (e.message || JSON.stringify(e)).toLowerCase();
+            
+            if (msg.includes("referer") || msg.includes("referrer")) {
+                  const errorMsg = "API Key Configuration Error: Your Google API Key has 'HTTP Referrer' restrictions. Please go to Google Cloud Console and set restrictions to 'None'.";
+                  jobStore.addLog(`❌ ${errorMsg}`);
+                  throw new Error(errorMsg);
+            }
+
             if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
                 jobStore.addLog(`❌ Fatal Error: ${e.message}`);
                 throw e; // Break completely out of loop
@@ -380,6 +392,12 @@ export const generateSceneImage = async (
 
     } catch (e: any) {
         console.error(`Gemini Image Gen Error (${model}):`, e);
+        
+        const msg = (e.message || JSON.stringify(e)).toLowerCase();
+        if (msg.includes("referer") || msg.includes("referrer")) {
+             throw new Error("API Key Configuration Error: 'HTTP Referrer' restrictions detected. Remove restrictions in Google Cloud Console.");
+        }
+
         if (e.status === 429) throw new Error("Daily AI quota exceeded (Image Generation).");
         if (e.status === 403 || e.message?.includes('PERMISSION_DENIED')) {
             throw new Error("PERMISSION_DENIED");
