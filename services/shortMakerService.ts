@@ -117,6 +117,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
           } catch(e) {
               attempts++;
               console.warn(`Single batch attempt ${attempts} failed`, e);
+              jobStore.addLog(`Script gen attempt ${attempts} failed. Retrying...`);
               if(attempts >= 3) throw e;
               await new Promise(r => setTimeout(r, 2000));
           }
@@ -251,15 +252,15 @@ JSON SCHEMA:
   "title": "String (Max 6 words)",
   "final_caption": "String (Max 8 words)",
   "voice_instruction": { "voice": "String", "lang": "String", "tone": "String" },
-  "output_settings": { "video_resolution": "String (1080x1920 or 1920x1080)", "fps": "Number", "scene_duration_default": "Number" },
+  "output_settings": { "video_resolution": "String", "fps": "Number", "scene_duration_default": "Number" },
   "scenes": [
     {
       "scene_number": "Number (Must start at ${startSceneNumber})",
-      "narration_text": "String (The spoken script)",
-      "visual_description": "String (Brief logic)",
-      "character_tokens": ["String", "String"],
-      "environment_tokens": ["String", "String"],
-      "image_prompt": "String (Detailed AI art prompt)",
+      "narration_text": "String",
+      "visual_description": "String",
+      "character_tokens": ["String"],
+      "environment_tokens": ["String"],
+      "image_prompt": "String",
       "timecodes": { "start_second": "Number", "end_second": "Number" }
     }
   ]
@@ -274,7 +275,6 @@ AspectRatio: "${ratioText}"
   `;
 
   try {
-    // Pass everything to the Edge Function to handle the generation
     const response = await withTimeout(
         invokeGemini('generate-story-batch', {
             model: "gemini-2.5-flash",
@@ -283,6 +283,7 @@ AspectRatio: "${ratioText}"
                 systemInstruction: systemInstruction,
                 temperature: 0.3,
                 maxOutputTokens: 8192,
+                responseMimeType: "application/json" // Force JSON
             }
         }), 
         90000, 
@@ -290,6 +291,7 @@ AspectRatio: "${ratioText}"
     );
 
     let text = response.text || "";
+    // Clean markdown blocks if present (even with JSON mime type, sometimes it wraps)
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
     if (!text) throw new Error("Empty response from Gemini");
@@ -297,6 +299,7 @@ AspectRatio: "${ratioText}"
     return JSON.parse(text) as ShortMakerManifest;
 
   } catch (error: any) {
+    console.error("generateStoryBatch Error:", error);
     if (error.status === 429) throw new Error("Daily AI quota exceeded (Story Generation).");
     if (error.status === 403 || error.message?.includes('PERMISSION_DENIED')) throw new Error("API Key Error: Permission Denied.");
     throw error;

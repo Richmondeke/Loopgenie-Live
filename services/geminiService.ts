@@ -9,10 +9,13 @@ export const invokeGemini = async (action: string, payload: any) => {
 
     if (error) {
         console.error(`Gemini Edge Function Error (${action}):`, error);
+        // If Supabase returns a 500, often the actual body is hidden in 'error.context' or we can't get it easily.
+        // But logging the full error object helps debugging.
         throw new Error(error.message || "Failed to contact AI service.");
     }
     
     if (data.error) {
+        console.error("Gemini Logic Error:", data);
         throw new Error(data.error);
     }
 
