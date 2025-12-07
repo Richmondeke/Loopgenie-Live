@@ -235,7 +235,7 @@ const generateStoryBatch = async (
     "STYLE: Engaging and Viral.";
 
   const systemInstruction = `
-SYSTEM: You are a professional video content strategist. Output **ONLY** valid JSON.
+SYSTEM: You are a professional video content strategist. Output **ONLY** valid JSON. No markdown, no pre-amble.
 
 OBJECTIVE: Create a script for a video.
 ${styleInstruction}
@@ -281,9 +281,8 @@ AspectRatio: "${ratioText}"
             contents: userPrompt,
             config: {
                 systemInstruction: systemInstruction,
-                temperature: 0.3,
-                maxOutputTokens: 8192,
-                responseMimeType: "application/json" // Force JSON
+                temperature: 0.4,
+                // Removed maxOutputTokens and responseMimeType to be safe and use defaults
             }
         }), 
         90000, 
@@ -291,8 +290,14 @@ AspectRatio: "${ratioText}"
     );
 
     let text = response.text || "";
-    // Clean markdown blocks if present (even with JSON mime type, sometimes it wraps)
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    // Robust cleaning for JSON
+    if (text.includes("```json")) {
+        text = text.split("```json")[1].split("```")[0];
+    } else if (text.includes("```")) {
+        text = text.split("```")[1].split("```")[0];
+    }
+    text = text.trim();
 
     if (!text) throw new Error("Empty response from Gemini");
     
@@ -300,8 +305,13 @@ AspectRatio: "${ratioText}"
 
   } catch (error: any) {
     console.error("generateStoryBatch Error:", error);
+    
+    if (error.message?.includes('Missing GEMINI_API secret')) {
+        throw new Error("Missing API Key. Please add your Google Gemini API Key in the Settings page to continue.");
+    }
     if (error.status === 429) throw new Error("Daily AI quota exceeded (Story Generation).");
     if (error.status === 403 || error.message?.includes('PERMISSION_DENIED')) throw new Error("API Key Error: Permission Denied.");
+    
     throw error;
   }
 };

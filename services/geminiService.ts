@@ -3,19 +3,44 @@ import { supabase } from "../supabaseClient";
 
 // Generic Helper to call the Edge Function
 export const invokeGemini = async (action: string, payload: any) => {
+    // Inject API Key from Local Storage if available (User Override)
+    const userApiKey = localStorage.getItem('genavatar_gemini_key');
+
     const { data, error } = await supabase.functions.invoke('gemini-api', {
-        body: { action, payload }
+        body: { 
+            action, 
+            payload: { ...payload, apiKey: userApiKey } 
+        }
     });
 
     if (error) {
+        // Try to see if there is a response body in the error context (often Supabase hides it)
+        // If data is null but error is present, it might be a 500.
+        // However, supabase-js doesn't easily give the body of a 500 response.
+        // BUT, if the Edge function returns a Response object with status 500, `supabase.functions.invoke`
+        // might treat it as a successful network call with `data` containing the body, OR it might populate `error`.
+        // Let's assume if `data` has an `error` field, we use it.
+        
         console.error(`Gemini Edge Function Error (${action}):`, error);
-        // If Supabase returns a 500, often the actual body is hidden in 'error.context' or we can't get it easily.
-        // But logging the full error object helps debugging.
-        throw new Error(error.message || "Failed to contact AI service.");
+        
+        // If we can extract a context message
+        let detailedMessage = error.message || "Failed to contact AI service.";
+        if (error.context && typeof error.context === 'object') {
+             // Sometimes context contains the response text
+             try {
+                 const body = await (error.context as Response).json();
+                 if (body && body.error) detailedMessage = body.error;
+             } catch(e) {
+                 // ignore
+             }
+        }
+        
+        throw new Error(detailedMessage);
     }
     
-    if (data.error) {
-        console.error("Gemini Logic Error:", data);
+    // Check if the function returned a JSON with an error property (handled in our new try/catch block)
+    if (data && data.error) {
+        console.error("Gemini Logic Error:", data.error);
         throw new Error(data.error);
     }
 

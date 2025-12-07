@@ -19,17 +19,18 @@ serve(async (req) => {
   }
 
   try {
-    const apiKey = Deno.env.get('GEMINI_API');
+    const { action, payload } = await req.json();
+    console.log(`Processing action: ${action}`);
+
+    // 1. Resolve API Key (Client Override > Server Env)
+    const apiKey = payload?.apiKey || Deno.env.get('GEMINI_API');
+
     if (!apiKey) {
       console.error("Missing GEMINI_API secret");
-      throw new Error('Server Configuration Error: Missing GEMINI_API secret.');
+      throw new Error('Server Configuration Error: Missing GEMINI_API secret. Please add your Google Gemini API Key in Settings.');
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const { action, payload } = await req.json();
-
-    console.log(`Processing action: ${action}`);
-
     let result;
 
     switch (action) {
@@ -55,13 +56,11 @@ serve(async (req) => {
         // Payload: { model, contents, config }
         const { model, contents, config } = payload;
         
-        // Ensure config exists
+        // Use defaults if config is missing
         const safeConfig = config || {};
         
-        // Force JSON if the prompt asks for it, to be safe
-        if (!safeConfig.responseMimeType && (contents.includes("JSON") || safeConfig.systemInstruction?.includes("JSON"))) {
-             safeConfig.responseMimeType = "application/json";
-        }
+        // Remove manual injection of responseMimeType to be safe. 
+        // We rely on the prompt instructing the model to output JSON.
 
         const response = await ai.models.generateContent({
           model: model || "gemini-2.5-flash",
@@ -155,6 +154,7 @@ serve(async (req) => {
 
   } catch (error: any) {
     console.error("Edge Function Error:", error);
+    // Explicitly return 500 but with CORS headers so client can read body
     return new Response(JSON.stringify({ error: error.message, details: error.toString() }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
