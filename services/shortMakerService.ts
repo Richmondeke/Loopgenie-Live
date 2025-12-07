@@ -5,6 +5,59 @@ import { generateSpeech, getApiKey, combineAudioSegments } from "./geminiService
 import { generatePollinationsImage } from "./pollinationsService";
 
 // ==========================================
+// 0. BACKGROUND JOB STORE (Singleton)
+// ==========================================
+
+export type JobStatus = 'IDLE' | 'SCRIPTING' | 'VISUALIZING' | 'NARRATING' | 'ASSEMBLING' | 'COMPLETED' | 'FAILED';
+
+class ShortMakerJobStore {
+    manifest: ShortMakerManifest | null = null;
+    logs: string[] = [];
+    status: JobStatus = 'IDLE';
+    completedImages: number = 0;
+    totalImages: number = 0;
+    error: string | null = null;
+    videoUrl: string | null = null;
+    
+    // Observers
+    private listeners: (() => void)[] = [];
+
+    subscribe(listener: () => void) {
+        this.listeners.push(listener);
+        return () => {
+            this.listeners = this.listeners.filter(l => l !== listener);
+        };
+    }
+
+    notify() {
+        this.listeners.forEach(l => l());
+    }
+
+    reset() {
+        this.manifest = null;
+        this.logs = [];
+        this.status = 'IDLE';
+        this.completedImages = 0;
+        this.totalImages = 0;
+        this.error = null;
+        this.videoUrl = null;
+        this.notify();
+    }
+
+    update(updates: Partial<ShortMakerJobStore>) {
+        Object.assign(this, updates);
+        this.notify();
+    }
+
+    addLog(msg: string) {
+        this.logs = [...this.logs, msg];
+        this.notify();
+    }
+}
+
+export const jobStore = new ShortMakerJobStore();
+
+// ==========================================
 // 1. GENERATE STORY (Gemini Text)
 // ==========================================
 
@@ -18,7 +71,6 @@ export interface GenerateStoryRequest {
   mode?: 'SHORTS' | 'STORYBOOK';
   durationTier?: '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
   aspectRatio?: '9:16' | '16:9' | '1:1' | '4:3';
-  onProgress?: (manifest: ShortMakerManifest) => void;
 }
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
@@ -45,6 +97,9 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const targetScenesTotal = getTargetSceneCount(req.durationTier || '30s');
   
+  jobStore.update({ status: 'SCRIPTING', totalImages: targetScenesTotal });
+  jobStore.addLog(`Starting script generation for ${targetScenesTotal} scenes...`);
+
   // For short videos, we can do it in one go
   if (targetScenesTotal <= 15) {
       let attempts = 0;
@@ -53,7 +108,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
               const result = await generateStoryBatch(ai, req, targetScenesTotal, 1);
               // Fix numbering just in case
               result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
-              if (req.onProgress) req.onProgress(result);
+              
+              jobStore.update({ manifest: result });
               return result;
           } catch(e) {
               attempts++;
@@ -65,10 +121,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       throw new Error("Failed to generate story after retries");
   }
 
-  // For long videos (5m+), we generate in chunks to avoid context window issues and timeouts
-  // We'll generate "Chapters" essentially.
+  // For long videos (5m+), we generate in chunks
   let allScenes: ShortMakerScene[] = [];
-  // Reduced batch size to 5 to prevent RPC/Timeout errors on large payloads
   const batchSize = 5; 
   const batches = Math.ceil(targetScenesTotal / batchSize);
   
@@ -96,17 +150,16 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       let batchSuccess = false;
       let batchAttempts = 0;
 
-      while(!batchSuccess && batchAttempts < 5) { // Increased retries to 5
+      while(!batchSuccess && batchAttempts < 5) {
         try {
-            console.log(`Generating batch ${i+1}/${batches}...`);
+            jobStore.addLog(`Writing Batch ${i+1}/${batches}...`);
             const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
             
-            // Merge data
             if (i === 0) {
                 baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
             }
             
-            // Critical Fix: Force sequential numbering based on accumulation to prevent gaps or jumps
+            // Normalize numbering
             const normalizedScenes = batchManifest.scenes.map((s, idx) => ({
                 ...s,
                 scene_number: allScenes.length + idx + 1
@@ -114,42 +167,46 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
 
             allScenes = [...allScenes, ...normalizedScenes];
             
-            // Notify UI of progress so user sees scenes appearing
-            if (req.onProgress) {
-                req.onProgress({
+            // Update Store for Live View
+            jobStore.update({
+                manifest: {
                     ...baseManifest,
                     scenes: allScenes
-                });
-            }
+                }
+            });
 
             batchSuccess = true;
             
-            // Artificial delay to prevent rate limits between batches
-            await new Promise(r => setTimeout(r, 1000));
+            // TIMED BREAK: Cooling off to prevent rate limits or browser lag
+            jobStore.addLog(`Cooling down (3s)...`);
+            await new Promise(r => setTimeout(r, 3000));
 
         } catch (e) {
             batchAttempts++;
             console.error(`Batch ${i+1} attempt ${batchAttempts} failed`, e);
             if (batchAttempts < 5) {
-                 await new Promise(r => setTimeout(r, 3000 * batchAttempts)); // Exponential backoff
+                 jobStore.addLog(`Batch ${i+1} failed, retrying in 3s...`);
+                 await new Promise(r => setTimeout(r, 3000 * batchAttempts));
             }
         }
       }
 
       if (!batchSuccess) {
-          console.error(`Batch ${i+1} failed permanently. Stopping generation.`);
-          // We stop here but return what we have so the user doesn't lose everything
+          jobStore.addLog(`Error: Batch ${i+1} failed permanently.`);
           break; 
       }
   }
   
-  return {
+  const finalManifest = {
       ...baseManifest,
       scenes: allScenes,
-      status: "story_ready",
+      status: "story_ready" as const,
       seed: req.seed || Math.random().toString(36).substring(7),
       idea_input: req.idea
   };
+  
+  jobStore.update({ manifest: finalManifest });
+  return finalManifest;
 };
 
 // Internal function to generate a specific batch of scenes
@@ -280,7 +337,6 @@ export const generateSceneImage = async (
     } catch (e: any) {
         console.error(`Gemini Image Gen Error (${model}):`, e);
         if (e.status === 429) throw new Error("Daily AI quota exceeded (Image Generation).");
-        // Re-throw permission errors clearly so UI can handle them
         if (e.status === 403 || e.message?.includes('PERMISSION_DENIED')) {
             throw new Error("PERMISSION_DENIED");
         }
@@ -294,19 +350,19 @@ export const synthesizeAudio = async (
     preferredVoice: string = "Fenrir"
 ): Promise<{ audioUrl: string, duration: number }> => {
     
-    // Chunking logic for long scripts to avoid API limits and failures
     const audioSegments: string[] = [];
     let totalWords = 0;
     
-    // Process scenes in batches of parallel requests to speed up but not overwhelm
+    // Sync status with store
+    jobStore.update({ status: 'NARRATING' });
+
     const MAX_CONCURRENT = 5;
     for (let i = 0; i < manifest.scenes.length; i += MAX_CONCURRENT) {
+        jobStore.addLog(`Synthesizing audio batch ${i+1}...`);
         const batch = manifest.scenes.slice(i, i + MAX_CONCURRENT);
         const promises = batch.map(async (scene) => {
             if (!scene.narration_text) return null;
             try {
-                // If text is too long, Gemini TTS might fail, but scene narration is usually short
-                // We use the simpler Gemini TTS here for all cases as prompt doesn't strictly require ElevenLabs
                 return await generateSpeech(scene.narration_text, preferredVoice);
             } catch (e) {
                 console.warn(`TTS failed for scene ${scene.scene_number}`, e);
@@ -319,8 +375,10 @@ export const synthesizeAudio = async (
             if (res) audioSegments.push(res);
         });
         
-        // Count words
         batch.forEach(s => totalWords += (s.narration_text || '').split(' ').length);
+        
+        // Small break
+        await new Promise(r => setTimeout(r, 500));
     }
     
     if (audioSegments.length > 0) {
@@ -339,11 +397,12 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
 
     if (scenes.length === 0) throw new Error("No images generated to assemble video");
 
-    // Chunking logic for video rendering
+    jobStore.update({ status: 'ASSEMBLING' });
+    jobStore.addLog("Assembling final video...");
+
     const CHUNK_SIZE = 15;
     
     if (scenes.length <= CHUNK_SIZE) {
-        // Short video: direct render
         return await stitchVideoFrames(
             scenes, 
             manifest.generated_audio_url, 
@@ -354,16 +413,13 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         );
     }
 
-    // Long video: Chunk based approach
-    console.log(`Starting chunked render for ${scenes.length} scenes...`);
     const videoChunks: string[] = [];
     
     for (let i = 0; i < scenes.length; i += CHUNK_SIZE) {
         const chunkScenes = scenes.slice(i, i + CHUNK_SIZE);
-        console.log(`Rendering chunk ${i/CHUNK_SIZE + 1}...`);
+        jobStore.addLog(`Rendering video chunk ${i/CHUNK_SIZE + 1}...`);
         
         try {
-            // Render chunk visually (silent)
             const chunkUrl = await stitchVideoFrames(chunkScenes, undefined, 5000); 
             videoChunks.push(chunkUrl);
         } catch (e) {
@@ -372,7 +428,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         }
     }
 
-    console.log("Concatenating chunks...");
-    // Merge chunks and overlay the main narration audio
+    jobStore.addLog("Merging all video chunks...");
     return await concatenateVideos(videoChunks, 1080, 1920, manifest.generated_audio_url);
 };

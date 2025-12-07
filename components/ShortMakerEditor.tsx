@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
-import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo } from '../services/shortMakerService';
+import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
 
@@ -72,18 +72,55 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const scrollRef = useRef<HTMLDivElement>(null);
 
-    // Initial Load - Check for drafts
+    // --- EFFECT: SYNC WITH JOB STORE ---
     useEffect(() => {
-        const savedDraft = localStorage.getItem('shortmaker_draft');
-        if (savedDraft) {
-            try {
-                const parsed = JSON.parse(savedDraft);
-                if (parsed && parsed.manifest) {
-                    setHasDraft(true);
-                }
-            } catch (e) {}
+        // 1. Initial State Load from Background Store
+        if (jobStore.status !== 'IDLE' && jobStore.status !== 'COMPLETED' && jobStore.status !== 'FAILED') {
+            console.log("Found active background job, restoring state...");
+            setIsProcessing(true);
+            setManifest(jobStore.manifest);
+            setLogs(jobStore.logs);
+            setStep(mapStatusToStep(jobStore.status));
+            setCompletedImages(jobStore.completedImages);
+            setTotalVisualsToGen(jobStore.totalImages);
+        } else {
+            // Check LocalStorage Draft if no active memory job
+            const savedDraft = localStorage.getItem('shortmaker_draft');
+            if (savedDraft) {
+                try {
+                    const parsed = JSON.parse(savedDraft);
+                    if (parsed && parsed.manifest) setHasDraft(true);
+                } catch (e) {}
+            }
         }
+
+        // 2. Subscribe to updates
+        const unsubscribe = jobStore.subscribe(() => {
+            setManifest(jobStore.manifest);
+            setLogs([...jobStore.logs]); // Spread to force react update
+            setCompletedImages(jobStore.completedImages);
+            setTotalVisualsToGen(jobStore.totalImages);
+            
+            if (jobStore.status === 'FAILED') {
+                setIsProcessing(false);
+                setErrorMsg(jobStore.error || "Unknown Error");
+            } else {
+                setStep(mapStatusToStep(jobStore.status));
+                if (jobStore.videoUrl) setVideoUrl(jobStore.videoUrl);
+            }
+        });
+
+        return () => unsubscribe();
     }, []);
+
+    const mapStatusToStep = (status: string): ProductionStep => {
+        if (status === 'SCRIPTING') return 'SCRIPT';
+        if (status === 'VISUALIZING') return 'VISUALS';
+        if (status === 'NARRATING') return 'AUDIO';
+        if (status === 'ASSEMBLING') return 'ASSEMBLY';
+        if (status === 'COMPLETED') return 'COMPLETE';
+        return 'INPUT';
+    };
 
     // Auto-save draft on manifest change
     useEffect(() => {
@@ -120,6 +157,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const addLog = (msg: string) => {
         setLogs(prev => [...prev, msg]);
+        jobStore.addLog(msg);
         if (scrollRef.current) {
             setTimeout(() => {
                 if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -190,6 +228,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const clearDraft = () => {
         if(confirm("Are you sure? This will delete your current progress.")) {
+            jobStore.reset();
             localStorage.removeItem('shortmaker_draft');
             setManifest(null);
             setStep('INPUT');
@@ -212,25 +251,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         let attempts = 0;
         const maxAttempts = 3;
 
-        // Try Primary Model
         while (!url && attempts < maxAttempts) {
             try {
                 url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model);
             } catch (err: any) {
-                // Critical Fix: Fail fast on permission denied (403) or known persistent errors
                 if (err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
                      console.warn(`Permission denied for ${model}, switching to fallback.`);
                      throw new Error('PERMISSION_DENIED');
                 }
-
                 attempts++;
-                const delay = attempts * 2000; // Exponential backoff
+                const delay = attempts * 2000;
                 console.warn(`Scene ${scene.scene_number} retry ${attempts} (${model})...`);
                 await sleep(delay);
             }
         }
-
-        // Return if successful, otherwise empty string (will trigger fallback logic in runProduction)
         return url;
     };
 
@@ -239,8 +273,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         setIsProcessing(true);
         setErrorMsg('');
         setIsSaved(false);
+        
+        // Reset store if starting fresh
+        if (!resume) jobStore.reset();
 
-        // Keep track of which model we are using to avoid checking permissions on every image
         let currentVisualModel = visualModel;
 
         if (!resume) {
@@ -263,7 +299,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 const isLongForm = ['5m', '10m', '20m'].includes(duration);
                 addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form mode active)' : ''}`);
                 
-                // Real-time script generation using callback
                 currentManifest = await generateStory({
                     idea,
                     seed: seed || undefined,
@@ -272,11 +307,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     durationTier: duration,
                     aspectRatio: aspectRatio,
                     voice_preference: { voice: selectedVoice },
-                    scriptStyle: scriptStyle,
-                    onProgress: (partial) => {
-                        // Directly update state to show cards appearing in real-time
-                        setManifest(partial);
-                    }
+                    scriptStyle: scriptStyle
                 });
                 
                 setManifest(currentManifest);
@@ -287,47 +318,49 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             // STEP 2: VISUALS
             setStep('VISUALS');
-            // We use a local reference to keep track of progress, but always push to state
+            jobStore.update({ status: 'VISUALIZING' });
+            
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
             
             const missingScenes = workingScenes.filter(s => !s.generated_image_url);
+            
+            // Sync with Store
+            jobStore.update({ 
+                manifest: currentManifest, 
+                totalImages: workingScenes.length,
+                completedImages: workingScenes.length - missingScenes.length 
+            });
+            
             setTotalVisualsToGen(workingScenes.length);
             setCompletedImages(workingScenes.length - missingScenes.length);
 
             if (missingScenes.length > 0) {
                 addLog(`🎨 Generating visuals (${missingScenes.length} remaining)...`);
                 
-                // Process in small batches to respect rate limits but allow some concurrency
                 const BATCH_SIZE = 2;
-                
                 for (let i = 0; i < missingScenes.length; i += BATCH_SIZE) {
                     const batch = missingScenes.slice(i, i + BATCH_SIZE);
                     
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
-                        if (idx === -1) return; // Should not happen
-
+                        
                         let url = '';
                         try {
                             url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel);
                         } catch (err: any) {
                              if (err.message === 'PERMISSION_DENIED') {
-                                 // Auto-switch to Flux globally for this run
                                  if (currentVisualModel !== 'flux') {
                                     addLog(`⚠️ Permissions issue. Switching to Flux for all remaining images.`);
                                     currentVisualModel = 'flux';
                                  }
-                                 // Retry with Flux immediately
                                  try {
                                      url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
                                  } catch(e) {}
                              }
                         }
 
-                        // Second layer fallback check
                         if (!url && currentVisualModel !== 'flux') {
-                             // If basic retry failed but wasn't a perm error, try Flux just for this one image
                              try {
                                  url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
                                  if (url) addLog(`✅ Scene ${scene.scene_number}: Saved by Flux fallback.`);
@@ -341,23 +374,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Missing`;
                         }
                         
-                        // Update state progressively so UI grid updates
-                        // IMPORTANT: We must spread existing manifest to avoid overwriting unrelated props
-                        setManifest(prev => {
-                            if (!prev) return { ...currentManifest!, scenes: [...workingScenes] };
-                            return { ...prev, scenes: [...workingScenes] };
+                        // Update Store incrementally
+                        const currentCount = jobStore.completedImages + 1;
+                        jobStore.update({
+                            manifest: { ...currentManifest!, scenes: [...workingScenes] },
+                            completedImages: currentCount
                         });
-                        setCompletedImages(prev => prev + 1);
                     }));
                     
-                    // Delay between batches
                     if (i + BATCH_SIZE < missingScenes.length) {
                         await sleep(1000); 
                     }
                 }
             }
             
-            // Final update to ensure consistency
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
             addLog("✅ All visuals generated.");
@@ -382,6 +412,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     addLog("⚠️ Audio issues, attempting fallback...");
                 }
                 currentManifest = { ...currentManifest, generated_audio_url: generatedAudioUrl };
+                
+                // Update Store
+                jobStore.update({ manifest: currentManifest });
                 setManifest(currentManifest);
             }
 
@@ -394,6 +427,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                 
                 const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
+                jobStore.update({ videoUrl: finalVideoUrl, status: 'COMPLETED' });
                 addLog("✅ Production Complete!");
                 
                 // STEP 5: SAVE
@@ -421,6 +455,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         shouldRedirect: false
                     });
                     setIsSaved(true);
+                    jobStore.reset(); // Clear store on successful save
                     localStorage.removeItem('shortmaker_draft');
                     addLog("💾 Saved to My Projects.");
                 } catch (saveError: any) {
@@ -433,6 +468,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             console.error(e);
             setErrorMsg(e.message || "Production failed.");
             addLog(`❌ Error: ${e.message}`);
+            jobStore.update({ status: 'FAILED', error: e.message });
         } finally {
             setIsProcessing(false);
         }
@@ -720,97 +756,99 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                  </div>
              </div>
 
-             {/* Right Preview Panel */}
-             <div className="flex-1 bg-black relative flex flex-col items-center justify-center p-8 overflow-y-auto">
+             {/* Right Preview Panel - Fixed Padding */}
+             <div className="flex-1 bg-black relative p-0 overflow-hidden">
                  {/* Background Grid */}
                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
-                 {videoUrl ? (
-                     <div className="relative z-10 w-full max-w-sm md:max-w-md animate-in zoom-in duration-500">
-                         <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
-                             <video 
-                                src={videoUrl} 
-                                controls 
-                                autoPlay 
-                                loop 
-                                className="w-full h-auto max-h-[70vh] object-contain" 
-                             />
-                         </div>
-                         
-                         <div className="mt-6 flex flex-col gap-3">
-                             <a 
-                                href={videoUrl} 
-                                download="short_video.webm" 
-                                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all"
-                             >
-                                 <Download size={18} /> Download Video
-                             </a>
-                             <div className="flex gap-3">
-                                 <button onClick={() => runProduction(true)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
-                                     Regenerate
-                                 </button>
-                                 <button onClick={onBack} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
-                                     Start New
-                                 </button>
+                 <div className="h-full w-full overflow-y-auto pt-4 pb-40 px-8"> 
+                     {videoUrl ? (
+                         <div className="relative z-10 w-full max-w-sm md:max-w-md mx-auto animate-in zoom-in duration-500 mt-10">
+                             <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
+                                 <video 
+                                    src={videoUrl} 
+                                    controls 
+                                    autoPlay 
+                                    loop 
+                                    className="w-full h-auto max-h-[70vh] object-contain" 
+                                 />
                              </div>
-                             {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
-                         </div>
-                     </div>
-                 ) : manifest ? (
-                    // Live Production View (Always show if manifest exists)
-                    <div className="relative z-10 w-full max-w-4xl flex flex-col gap-6 animate-in fade-in duration-500">
-                        <div className="text-center mb-4">
-                            <h2 className="text-2xl font-bold text-white mb-2">{manifest.title || "Untitled Story"}</h2>
-                            <p className="text-gray-400 text-sm max-w-2xl mx-auto italic">"{manifest.final_caption || 'Generating content...'}"</p>
-                        </div>
-                        
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                            {manifest.scenes.map((scene, idx) => (
-                                <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
-                                    <div className="aspect-[9/16] bg-gray-800 relative">
-                                        {scene.generated_image_url ? (
-                                            <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
-                                        ) : (
-                                            <div className="absolute inset-0 flex items-center justify-center flex-col gap-2 p-2 text-center">
-                                                {idx < completedImages ? (
-                                                    <Loader2 className="animate-spin text-gray-600" />
-                                                ) : (
-                                                    <span className="text-xs text-gray-600 font-mono">Prompting...</span>
-                                                )}
-                                                <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene.image_prompt || `Generating Scene ${scene.scene_number}...`}</span>
-                                            </div>
-                                        )}
-                                        <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene.scene_number}</div>
-                                    </div>
-                                    <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto border-t border-gray-800">
-                                        {scene.narration_text}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                 ) : (
-                     <div className="relative z-10 text-center max-w-md">
-                         {errorMsg ? (
-                             <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl">
-                                 <AlertCircle className="text-red-500 mx-auto mb-3" size={40} />
-                                 <h3 className="text-xl font-bold text-red-100 mb-2">Production Failed</h3>
-                                 <p className="text-red-300 text-sm mb-6">{errorMsg}</p>
-                                 <button onClick={() => runProduction(true)} className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm">
-                                     Retry
-                                 </button>
-                             </div>
-                         ) : (
-                             <div className="animate-pulse flex flex-col items-center">
-                                 <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
-                                     <Sparkles className="text-indigo-400" size={32} />
+                             
+                             <div className="mt-6 flex flex-col gap-3">
+                                 <a 
+                                    href={videoUrl} 
+                                    download="short_video.webm" 
+                                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all"
+                                 >
+                                     <Download size={18} /> Download Video
+                                 </a>
+                                 <div className="flex gap-3">
+                                     <button onClick={() => runProduction(true)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
+                                         Regenerate
+                                     </button>
+                                     <button onClick={onBack} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
+                                         Start New
+                                     </button>
                                  </div>
-                                 <h3 className="text-2xl font-bold text-white mb-2">Initializing Studio...</h3>
-                                 <p className="text-gray-400">Please wait while we set up your creative environment.</p>
+                                 {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
                              </div>
-                         )}
-                     </div>
-                 )}
+                         </div>
+                     ) : manifest ? (
+                        // Live Production View
+                        <div className="relative z-10 w-full max-w-4xl mx-auto flex flex-col gap-6 animate-in fade-in duration-500">
+                            <div className="text-center mb-4">
+                                <h2 className="text-2xl font-bold text-white mb-2">{manifest.title || "Untitled Story"}</h2>
+                                <p className="text-gray-400 text-sm max-w-2xl mx-auto italic">"{manifest.final_caption || 'Generating content...'}"</p>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                {manifest.scenes.map((scene, idx) => (
+                                    <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+                                        <div className="aspect-[9/16] bg-gray-800 relative">
+                                            {scene.generated_image_url ? (
+                                                <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
+                                            ) : (
+                                                <div className="absolute inset-0 flex items-center justify-center flex-col gap-2 p-2 text-center">
+                                                    {idx < completedImages ? (
+                                                        <Loader2 className="animate-spin text-gray-600" />
+                                                    ) : (
+                                                        <span className="text-xs text-gray-600 font-mono">Prompting...</span>
+                                                    )}
+                                                    <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene.image_prompt || `Generating Scene ${scene.scene_number}...`}</span>
+                                                </div>
+                                            )}
+                                            <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene.scene_number}</div>
+                                        </div>
+                                        <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto border-t border-gray-800">
+                                            {scene.narration_text}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                     ) : (
+                         <div className="h-full flex items-center justify-center text-center max-w-md mx-auto">
+                             {errorMsg ? (
+                                 <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl">
+                                     <AlertCircle className="text-red-500 mx-auto mb-3" size={40} />
+                                     <h3 className="text-xl font-bold text-red-100 mb-2">Production Failed</h3>
+                                     <p className="text-red-300 text-sm mb-6">{errorMsg}</p>
+                                     <button onClick={() => runProduction(true)} className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm">
+                                         Retry
+                                     </button>
+                                 </div>
+                             ) : (
+                                 <div className="animate-pulse flex flex-col items-center">
+                                     <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
+                                         <Sparkles className="text-indigo-400" size={32} />
+                                     </div>
+                                     <h3 className="text-2xl font-bold text-white mb-2">Initializing Studio...</h3>
+                                     <p className="text-gray-400">Please wait while we set up your creative environment.</p>
+                                 </div>
+                             )}
+                         </div>
+                     )}
+                 </div>
              </div>
         </div>
     );
