@@ -114,7 +114,14 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
               
               jobStore.update({ manifest: result });
               return result;
-          } catch(e) {
+          } catch(e: any) {
+              // FATAL ERROR CHECK
+              const msg = e.message?.toLowerCase() || "";
+              if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
+                  jobStore.addLog(`❌ Fatal Error: ${e.message}`);
+                  throw e; // Do not retry fatal errors
+              }
+
               attempts++;
               console.warn(`Single batch attempt ${attempts} failed`, e);
               jobStore.addLog(`Script gen attempt ${attempts} failed. Retrying...`);
@@ -187,7 +194,14 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
             jobStore.addLog(`Cooling down (3s)...`);
             await new Promise(r => setTimeout(r, 3000));
 
-        } catch (e) {
+        } catch (e: any) {
+            // FATAL ERROR CHECK
+            const msg = e.message?.toLowerCase() || "";
+            if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
+                jobStore.addLog(`❌ Fatal Error: ${e.message}`);
+                throw e; // Break completely out of loop
+            }
+
             batchAttempts++;
             console.error(`Batch ${i+1} attempt ${batchAttempts} failed`, e);
             if (batchAttempts < 5) {

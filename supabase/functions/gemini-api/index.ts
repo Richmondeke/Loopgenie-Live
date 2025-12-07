@@ -25,7 +25,8 @@ serve(async (req) => {
     let apiKey = payload?.apiKey;
     let keySource = 'Client';
 
-    if (!apiKey || !apiKey.trim()) {
+    // Strict check for empty strings/whitespace
+    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
         apiKey = Deno.env.get('GEMINI_API');
         keySource = 'Server Env';
     }
@@ -164,10 +165,26 @@ serve(async (req) => {
   } catch (error: any) {
     console.error("Edge Function Error:", error);
     
-    // Enhance error message for common 401 case with Gemini
     let errorMessage = error.message;
-    if (errorMessage.includes("API keys are not supported") || errorMessage.includes("CREDENTIALS_MISSING")) {
-        errorMessage = "Invalid API Key or Permissions. Please ensure your API key is valid and has access to Generative Language API.";
+    const errorDetails = JSON.stringify(error);
+
+    // 1. Handle Referrer Block (403)
+    // Google Cloud returns: "Requests from referer <empty> are blocked." or reason: "API_KEY_HTTP_REFERRER_BLOCKED"
+    if (errorDetails.includes("API_KEY_HTTP_REFERRER_BLOCKED") || errorMessage.includes("Requests from referer <empty> are blocked")) {
+        errorMessage = "API Key Error: Your API key has 'HTTP Referrer' restrictions which block this app. Please go to Google Cloud Console > Credentials and remove the restriction or add 'loopgenie.ai' (and localhost if testing).";
+    }
+    // 2. Handle IP Block (403)
+    else if (errorDetails.includes("API_KEY_IP_ADDRESS_BLOCKED")) {
+        errorMessage = "API Key Error: Your key has IP restrictions. Please remove them or allow all IPs.";
+    }
+    // 3. Handle OAuth/Empty Key Fallback (401)
+    // The SDK falls back to OAuth if key is empty/invalid, leading to "API keys are not supported..." or "CREDENTIALS_MISSING"
+    else if (errorMessage.includes("API keys are not supported") || errorDetails.includes("CREDENTIALS_MISSING")) {
+        errorMessage = "Invalid API Key. The key provided is likely empty or invalid. Please check your Settings.";
+    }
+    // 4. Handle Quota (429)
+    else if (errorMessage.includes("429") || errorMessage.includes("quota")) {
+        errorMessage = "Daily AI quota exceeded. Please try again later or use a different API key.";
     }
 
     // Explicitly return 500 but with CORS headers so client can read body
