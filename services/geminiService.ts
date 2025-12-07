@@ -1,52 +1,25 @@
-
-import { GoogleGenAI, Type } from "@google/genai";
 import { ScriptGenerationRequest } from "../types";
-import { GEMINI_API_KEYS } from "../constants";
+import { supabase } from "../supabaseClient";
 
-// Helper to get API Key strictly from env, local storage, or constants
-export const getApiKey = () => {
-    // 1. Try environment variable
-    if (process.env.API_KEY) {
-        return process.env.API_KEY;
-    }
-    // 2. Try Local Storage
-    const localKey = localStorage.getItem('genavatar_gemini_key');
-    if (localKey) {
-        return localKey;
-    }
-    // 3. Try User provided key from constants
-    if (GEMINI_API_KEYS.length > 0 && GEMINI_API_KEYS[0]) {
-        return GEMINI_API_KEYS[0];
-    }
-    return "";
-};
-
-// ... generateScriptContent ... (omitted, unchanged logic)
-export const generateScriptContent = async (request: ScriptGenerationRequest): Promise<Record<string, string>> => {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("Gemini API Key is missing. Please check Settings or constants.ts");
-  
-  const ai = new GoogleGenAI({ apiKey });
-  // ... Schema setup ...
-  const schema = { type: Type.OBJECT, properties: { script: { type: Type.STRING } }, required: ["script"] };
-  const prompt = `Topic: ${request.topic}. Tone: ${request.tone}. Write a 60s script.`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: { responseMimeType: "application/json", responseSchema: schema }
+// Generic Helper to call the Edge Function
+export const invokeGemini = async (action: string, payload: any) => {
+    const { data, error } = await supabase.functions.invoke('gemini-api', {
+        body: { action, payload }
     });
-    return JSON.parse(response.text || '{"script":""}');
-  } catch (error: any) {
-    if (error.status === 403 || error.message?.includes('403')) {
-        throw new Error("API Key Invalid/Leaked. Check Settings.");
+
+    if (error) {
+        console.error(`Gemini Edge Function Error (${action}):`, error);
+        throw new Error(error.message || "Failed to contact AI service.");
     }
-    throw error;
-  }
+    
+    if (data.error) {
+        throw new Error(data.error);
+    }
+
+    return data;
 };
 
-// ... base64ToUint8Array & createWavHeader ... (omitted, unchanged)
+// ... base64ToUint8Array & createWavHeader ... (Helpers kept for Client-side audio processing)
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -92,104 +65,65 @@ export const combineAudioSegments = (audioDataUris: string[]): string => {
     const finalBytes = new Uint8Array(header.length + combinedPcm.length);
     finalBytes.set(header); finalBytes.set(combinedPcm, header.length);
     return `data:audio/wav;base64,${btoa(Array.from(finalBytes).map((byte) => String.fromCharCode(byte)).join(''))}`;
-}
+};
+
+// --- Secure Implementations ---
+
+export const getApiKey = () => {
+    // This function is deprecated for direct use but kept if needed for legacy checks
+    // The new flow uses the Edge Function
+    return ""; 
+};
+
+export const generateScriptContent = async (request: ScriptGenerationRequest): Promise<Record<string, string>> => {
+  // Using string literals for schema types to avoid client-side dependency on @google/genai
+  const schema = { 
+    type: 'OBJECT', 
+    properties: { 
+        script: { type: 'STRING' } 
+    }, 
+    required: ["script"] 
+  };
+  
+  const prompt = `Topic: ${request.topic}. Tone: ${request.tone}. Write a 60s script.`;
+
+  return await invokeGemini('generate-script', {
+      prompt,
+      schema
+  });
+};
 
 export const generateSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("Gemini API Key is missing.");
-  const ai = new GoogleGenAI({ apiKey });
+  const result = await invokeGemini('generate-speech', { text, voiceName });
+  
+  // Reconstruct WAV from raw PCM returned by edge (to keep edge function light)
+  const pcmBytes = base64ToUint8Array(result.audioData);
+  const wavHeader = createWavHeader(pcmBytes.length, 24000, 1);
+  const wavBytes = new Uint8Array(wavHeader.length + pcmBytes.length);
+  wavBytes.set(wavHeader); wavBytes.set(pcmBytes, wavHeader.length);
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: { parts: [{ text: text }] },
-      config: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voiceName } } } }
-    });
-
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!base64Audio) throw new Error("No audio data returned from Gemini TTS");
-
-    const pcmBytes = base64ToUint8Array(base64Audio);
-    const wavHeader = createWavHeader(pcmBytes.length, 24000, 1);
-    const wavBytes = new Uint8Array(wavHeader.length + pcmBytes.length);
-    wavBytes.set(wavHeader); wavBytes.set(pcmBytes, wavHeader.length);
-
-    return `data:audio/wav;base64,${btoa(Array.from(wavBytes).map((byte) => String.fromCharCode(byte)).join(''))}`;
-
-  } catch (error: any) {
-    console.error("Gemini TTS Error:", error);
-    if (error.message?.includes('API_KEY_HTTP_REFERRER_BLOCKED') || (error.details && JSON.stringify(error.details).includes('API_KEY_HTTP_REFERRER_BLOCKED'))) {
-        throw new Error("Security Error: Your API Key is restricted to a different domain. Please remove domain restrictions in Google Cloud Console or add this domain.");
-    }
-    if (error.status === 403 || error.message?.includes('403')) {
-        throw new Error("API Key Invalid or Restricted. Check Settings.");
-    }
-    if (error.status === 429 || error.message?.includes('RESOURCE_EXHAUSTED')) {
-        throw new Error("Daily AI quota exceeded.");
-     }
-     throw error;
-  }
+  return `data:audio/wav;base64,${btoa(Array.from(wavBytes).map((byte) => String.fromCharCode(byte)).join(''))}`;
 };
 
 export const analyzeProductImage = async (base64Image: string): Promise<string> => {
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error("Gemini API Key is missing.");
-    const ai = new GoogleGenAI({ apiKey });
-
-    try {
-        const cleanBase64 = base64Image.split(',')[1] || base64Image;
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: "image/png", data: cleanBase64 } },
-                    { text: "Analyze this product image. Provide a detailed, concise description of the clothing item (color, fabric texture, cut, key features) suitable for generating a new high-fashion photo of it." }
-                ]
-            }
-        });
-        return response.text || "A stylish fashion item.";
-    } catch (e: any) {
-        console.error("Fashion analysis error:", e);
-        return "A high-fashion garment.";
-    }
+    const result = await invokeGemini('analyze-image', {
+        imageBase64: base64Image,
+        prompt: "Analyze this product image. Provide a detailed, concise description suitable for generating a new high-fashion photo of it."
+    });
+    return result.text;
 };
 
 export const generateFashionImage = async (prompt: string): Promise<string> => {
-    const apiKey = getApiKey();
-    if (!apiKey) throw new Error("Gemini API Key is missing.");
-    const ai = new GoogleGenAI({ apiKey });
-
-    try {
-        // Use Gemini 2.5 Flash Image or 3 Pro Image for high quality
-        // 2.5 Flash Image is generally faster and sufficient
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash-image",
-            contents: { parts: [{ text: prompt }] },
-            config: { 
-                imageConfig: { aspectRatio: "3:4" } // Vertical fashion portrait
-            }
-        });
-        
-        // Handle result
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-             if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        }
-        throw new Error("No image returned");
-
-    } catch (e: any) {
-        console.error("Fashion generation error:", e);
-        if (e.status === 429) throw new Error("Daily Quota Exceeded. Please try again later.");
-        throw new Error("Failed to generate image.");
-    }
+    const result = await invokeGemini('generate-image', {
+        prompt,
+        aspectRatio: "3:4",
+        model: "gemini-2.5-flash-image"
+    });
+    return result.imageData;
 };
 
-export const generateVeoVideo = async (prompt: string, aspectRatio: string = '16:9', model: string = 'veo-3.1-fast-generate-preview'): Promise<string> => { 
-    // ... Placeholder implementation for VEO integration ...
-    // Since we are focused on fashion in this specific request, we leave this as basic signature
-    // In a real app, this would call generateVideos similar to how generateContent is called.
-    return ""; 
-}
-
+// Mock/Placeholder for Veo (would also move to Edge in production)
+export const generateVeoVideo = async (prompt: string): Promise<string> => { return ""; }
 export const generateVeoImageToVideo = async (p: string, i: string): Promise<string> => { return ""; }
 export const generateVeoProductVideo = async (p: string, i: string[], r: any): Promise<string> => { return ""; }
 export const generateProductShotPrompts = async (i: string, u: string): Promise<string[]> => { return []; }

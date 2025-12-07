@@ -1,7 +1,7 @@
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { invokeGemini } from "./geminiService";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames, concatenateVideos } from "./ffmpegService";
-import { generateSpeech, getApiKey, combineAudioSegments } from "./geminiService";
+import { generateSpeech, combineAudioSegments } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
 
 // ==========================================
@@ -58,7 +58,7 @@ class ShortMakerJobStore {
 export const jobStore = new ShortMakerJobStore();
 
 // ==========================================
-// 1. GENERATE STORY (Gemini Text)
+// 1. GENERATE STORY (Gemini Via Edge)
 // ==========================================
 
 export interface GenerateStoryRequest {
@@ -94,7 +94,6 @@ const getTargetSceneCount = (duration: string): number => {
 };
 
 export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMakerManifest> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const targetScenesTotal = getTargetSceneCount(req.durationTier || '30s');
   
   jobStore.update({ status: 'SCRIPTING', totalImages: targetScenesTotal });
@@ -105,7 +104,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       let attempts = 0;
       while(attempts < 3) {
           try {
-              const result = await generateStoryBatch(ai, req, targetScenesTotal, 1);
+              const result = await generateStoryBatch(req, targetScenesTotal, 1);
               // Check for empty scenes
               if (!result.scenes || result.scenes.length === 0) {
                   throw new Error("AI returned an empty script.");
@@ -157,7 +156,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       while(!batchSuccess && batchAttempts < 5) {
         try {
             jobStore.addLog(`Writing Batch ${i+1}/${batches}...`);
-            const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
+            const batchManifest = await generateStoryBatch(req, count, startScene, context);
             
             if (!batchManifest.scenes) batchManifest.scenes = [];
 
@@ -183,7 +182,7 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
 
             batchSuccess = true;
             
-            // TIMED BREAK: Cooling off to prevent rate limits or browser lag
+            // TIMED BREAK: Cooling off
             jobStore.addLog(`Cooling down (3s)...`);
             await new Promise(r => setTimeout(r, 3000));
 
@@ -219,9 +218,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   return finalManifest;
 };
 
-// Internal function to generate a specific batch of scenes
+// Internal function to generate a specific batch of scenes via Edge Function
 const generateStoryBatch = async (
-    ai: GoogleGenAI, 
     req: GenerateStoryRequest, 
     count: number, 
     startSceneNumber: number,
@@ -276,15 +274,20 @@ AspectRatio: "${ratioText}"
   `;
 
   try {
-    const response = await withTimeout(ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: userPrompt,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.3,
-        maxOutputTokens: 8192,
-      }
-    }), 90000, "Script generation timed out.") as GenerateContentResponse;
+    // Pass everything to the Edge Function to handle the generation
+    const response = await withTimeout(
+        invokeGemini('generate-story-batch', {
+            model: "gemini-2.5-flash",
+            contents: userPrompt,
+            config: {
+                systemInstruction: systemInstruction,
+                temperature: 0.3,
+                maxOutputTokens: 8192,
+            }
+        }), 
+        90000, 
+        "Script generation timed out."
+    );
 
     let text = response.text || "";
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -331,19 +334,14 @@ export const generateSceneImage = async (
     }
 
     const geminiModelName = model === 'gemini_pro' ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     try {
-        const response = await ai.models.generateContent({
+        const result = await invokeGemini('generate-image', {
             model: geminiModelName,
-            contents: { parts: [{ text: fullPrompt }] },
-            config: { imageConfig: { aspectRatio: aspectRatio } }
+            prompt: fullPrompt,
+            aspectRatio: aspectRatio
         });
-        
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-             if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        }
-        throw new Error("No image data in response");
+        return result.imageData;
 
     } catch (e: any) {
         console.error(`Gemini Image Gen Error (${model}):`, e);
