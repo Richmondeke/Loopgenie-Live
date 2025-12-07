@@ -721,12 +721,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
              <div className="w-full md:w-[320px] bg-gray-900 border-r border-gray-800 flex flex-col z-20 shadow-xl">
                  <div className="p-6 border-b border-gray-800 bg-gray-900">
                      <div className="flex items-center gap-3 mb-2">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isProcessing ? 'bg-indigo-600 animate-pulse' : 'bg-green-600'}`}>
-                            {isProcessing ? <Loader2 className="animate-spin" /> : <CheckCircle />}
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isProcessing && !errorMsg ? 'bg-indigo-600 animate-pulse' : errorMsg ? 'bg-red-600' : 'bg-green-600'}`}>
+                            {errorMsg ? <AlertCircle /> : isProcessing ? <Loader2 className="animate-spin" /> : <CheckCircle />}
                         </div>
                         <div>
-                            <h2 className="font-bold text-lg leading-tight">{isProcessing ? 'Creating Magic' : 'Production Done'}</h2>
-                            <p className="text-xs text-gray-500">{isProcessing ? 'AI agents working...' : 'Ready to view'}</p>
+                            <h2 className="font-bold text-lg leading-tight">{errorMsg ? 'Error' : isProcessing ? 'Creating Magic' : 'Production Done'}</h2>
+                            <p className="text-xs text-gray-500">{errorMsg ? 'Stopped' : isProcessing ? 'AI agents working...' : 'Ready to view'}</p>
                         </div>
                      </div>
                  </div>
@@ -750,7 +750,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                  </div>
 
                  <div className="p-4 bg-gray-800 border-t border-gray-700">
-                     <button onClick={onBack} disabled={isProcessing} className="w-full py-3 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700 text-sm font-bold disabled:opacity-50">
+                     <button onClick={onBack} disabled={isProcessing && !errorMsg} className="w-full py-3 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-700 text-sm font-bold disabled:opacity-50">
                          Cancel / Back
                      </button>
                  </div>
@@ -793,6 +793,22 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                  {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
                              </div>
                          </div>
+                     ) : errorMsg ? (
+                         <div className="h-full flex items-center justify-center text-center max-w-md mx-auto">
+                             <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl animate-in zoom-in duration-300">
+                                 <AlertCircle className="text-red-500 mx-auto mb-3" size={40} />
+                                 <h3 className="text-xl font-bold text-red-100 mb-2">Production Paused</h3>
+                                 <p className="text-red-300 text-sm mb-6">{errorMsg}</p>
+                                 <div className="flex gap-3 justify-center">
+                                    <button onClick={() => runProduction(true)} className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm">
+                                        Retry
+                                    </button>
+                                    <button onClick={onBack} className="px-6 py-2 border border-red-500/30 text-red-200 rounded-lg font-bold text-sm hover:bg-red-900/20">
+                                        Cancel
+                                    </button>
+                                 </div>
+                             </div>
+                         </div>
                      ) : manifest ? (
                         // Live Production View
                         <div className="relative z-10 w-full max-w-4xl mx-auto flex flex-col gap-6 animate-in fade-in duration-500">
@@ -802,7 +818,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             </div>
                             
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                {manifest.scenes.map((scene, idx) => (
+                                {(manifest.scenes || []).map((scene, idx) => (
                                     <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
                                         <div className="aspect-[9/16] bg-gray-800 relative">
                                             {scene.generated_image_url ? (
@@ -828,24 +844,13 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         </div>
                      ) : (
                          <div className="h-full flex items-center justify-center text-center max-w-md mx-auto">
-                             {errorMsg ? (
-                                 <div className="bg-red-900/20 border border-red-500/50 p-6 rounded-2xl">
-                                     <AlertCircle className="text-red-500 mx-auto mb-3" size={40} />
-                                     <h3 className="text-xl font-bold text-red-100 mb-2">Production Failed</h3>
-                                     <p className="text-red-300 text-sm mb-6">{errorMsg}</p>
-                                     <button onClick={() => runProduction(true)} className="px-6 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-sm">
-                                         Retry
-                                     </button>
+                             <div className="animate-pulse flex flex-col items-center">
+                                 <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
+                                     <Sparkles className="text-indigo-400" size={32} />
                                  </div>
-                             ) : (
-                                 <div className="animate-pulse flex flex-col items-center">
-                                     <div className="w-24 h-24 bg-gray-800 rounded-full flex items-center justify-center mb-6 border-4 border-gray-700 border-t-indigo-500 animate-spin">
-                                         <Sparkles className="text-indigo-400" size={32} />
-                                     </div>
-                                     <h3 className="text-2xl font-bold text-white mb-2">Initializing Studio...</h3>
-                                     <p className="text-gray-400">Please wait while we set up your creative environment.</p>
-                                 </div>
-                             )}
+                                 <h3 className="text-2xl font-bold text-white mb-2">Initializing Studio...</h3>
+                                 <p className="text-gray-400">Please wait while we set up your creative environment.</p>
+                             </div>
                          </div>
                      )}
                  </div>

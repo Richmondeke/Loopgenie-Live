@@ -106,6 +106,10 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       while(attempts < 3) {
           try {
               const result = await generateStoryBatch(ai, req, targetScenesTotal, 1);
+              // Check for empty scenes
+              if (!result.scenes || result.scenes.length === 0) {
+                  throw new Error("AI returned an empty script.");
+              }
               // Fix numbering just in case
               result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
               
@@ -155,6 +159,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
             jobStore.addLog(`Writing Batch ${i+1}/${batches}...`);
             const batchManifest = await generateStoryBatch(ai, req, count, startScene, context);
             
+            if (!batchManifest.scenes) batchManifest.scenes = [];
+
             if (i === 0) {
                 baseManifest = { ...batchManifest, scenes: [] }; // Keep metadata
             }
@@ -197,6 +203,10 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       }
   }
   
+  if (allScenes.length === 0) {
+      throw new Error("Failed to generate any scenes for the script. Please try a different idea.");
+  }
+
   const finalManifest = {
       ...baseManifest,
       scenes: allScenes,
@@ -285,6 +295,7 @@ AspectRatio: "${ratioText}"
 
   } catch (error: any) {
     if (error.status === 429) throw new Error("Daily AI quota exceeded (Story Generation).");
+    if (error.status === 403 || error.message?.includes('PERMISSION_DENIED')) throw new Error("API Key Error: Permission Denied.");
     throw error;
   }
 };
