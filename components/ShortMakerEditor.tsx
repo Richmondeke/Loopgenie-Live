@@ -491,6 +491,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     };
 
+    // --- SAFE RENDERING HELPER ---
+    // Filters out corrupted scenes to prevent React crashes
+    const getSafeScenes = (rawScenes: any[]) => {
+        if (!Array.isArray(rawScenes)) return [];
+        return rawScenes.filter(s => !!s && typeof s === 'object');
+    };
+
+    const safeScenes = manifest ? getSafeScenes(manifest.scenes) : [];
+
     if (step === 'INPUT') {
         return (
             <div className="h-full bg-black text-white p-4 lg:p-8 overflow-y-auto flex items-center justify-center">
@@ -761,7 +770,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                  {/* Background Grid */}
                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
-                 <div className="h-full w-full overflow-y-auto pt-4 pb-40 px-8"> 
+                 <div className="h-full w-full overflow-y-auto pt-4 pb-32 px-8"> 
                      {videoUrl ? (
                          <div className="relative z-10 w-full max-w-sm md:max-w-md mx-auto animate-in zoom-in duration-500 mt-10">
                              <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
@@ -818,10 +827,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             </div>
                             
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                {(manifest.scenes || []).map((scene, idx) => (
+                                {safeScenes.map((scene, idx) => (
                                     <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
                                         <div className="aspect-[9/16] bg-gray-800 relative">
-                                            {scene.generated_image_url ? (
+                                            {scene?.generated_image_url ? (
                                                 <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center flex-col gap-2 p-2 text-center">
@@ -830,13 +839,13 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                                     ) : (
                                                         <span className="text-xs text-gray-600 font-mono">Prompting...</span>
                                                     )}
-                                                    <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene.image_prompt || `Generating Scene ${scene.scene_number}...`}</span>
+                                                    <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene?.image_prompt || `Generating Scene ${idx + 1}...`}</span>
                                                 </div>
                                             )}
-                                            <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene.scene_number}</div>
+                                            <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene?.scene_number || idx + 1}</div>
                                         </div>
                                         <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto border-t border-gray-800">
-                                            {scene.narration_text}
+                                            {scene?.narration_text}
                                         </div>
                                     </div>
                                 ))}
