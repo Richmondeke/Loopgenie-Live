@@ -85,12 +85,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             setTotalVisualsToGen(jobStore.totalImages);
         } else {
             // Check LocalStorage Draft if no active memory job
-            const savedDraft = localStorage.getItem('shortmaker_draft');
-            if (savedDraft) {
-                try {
+            try {
+                const savedDraft = localStorage.getItem('shortmaker_draft');
+                if (savedDraft) {
                     const parsed = JSON.parse(savedDraft);
                     if (parsed && parsed.manifest) setHasDraft(true);
-                } catch (e) {}
+                }
+            } catch (e) {
+                console.warn("Failed to check draft:", e);
+                localStorage.removeItem('shortmaker_draft');
             }
         }
 
@@ -122,18 +125,33 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         return 'INPUT';
     };
 
-    // Auto-save draft on manifest change
+    // Auto-save draft on manifest change - CRASH FIX: Strip images to avoid QuotaExceededError
     useEffect(() => {
         if (manifest) {
-            localStorage.setItem('shortmaker_draft', JSON.stringify({
-                manifest,
-                step,
-                duration,
-                idea,
-                videoUrl
-            }));
+            try {
+                // Create a lightweight version of the manifest for saving
+                const lightweightManifest = {
+                    ...manifest,
+                    scenes: manifest.scenes.map(s => ({
+                        ...s,
+                        generated_image_url: undefined // Don't save base64 images to local storage
+                    })),
+                    generated_audio_url: undefined, // Don't save heavy audio blobs
+                };
+
+                localStorage.setItem('shortmaker_draft', JSON.stringify({
+                    manifest: lightweightManifest,
+                    step: step === 'COMPLETE' ? 'INPUT' : step, // Reset to input if completed
+                    duration,
+                    idea,
+                    videoUrl: null // Don't save video blob
+                }));
+            } catch (e) {
+                console.warn("Failed to save draft to localStorage (likely quota exceeded). Ignoring.", e);
+                // Optional: Clear old drafts if space is needed, but for now just ignoring prevents crash.
+            }
         }
-    }, [manifest, step, videoUrl]);
+    }, [manifest, step, duration, idea]);
 
     // Cost Calc
     const getCost = (d: DurationTier) => {
@@ -214,15 +232,26 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             const savedDraft = localStorage.getItem('shortmaker_draft');
             if (savedDraft) {
                 const data = JSON.parse(savedDraft);
-                if (data.manifest) setManifest(data.manifest);
-                if (data.step) setStep(data.step);
+                if (data.manifest) {
+                    setManifest(data.manifest);
+                    // If we restored a manifest without images (stripped), we need to regenerate visuals
+                    // We detect this by checking if scenes exist but lack URLs
+                    const needsRegen = data.manifest.scenes.some((s: any) => !s.generated_image_url);
+                    if (needsRegen) {
+                        setStep('SCRIPT'); // Go back to script/visuals step
+                        addLog("📂 Draft restored. Visuals need regeneration (images are not saved in drafts).");
+                    } else {
+                        addLog("📂 Draft restored.");
+                    }
+                }
                 if (data.duration) setDuration(data.duration);
                 if (data.idea) setIdea(data.idea);
-                if (data.videoUrl) setVideoUrl(data.videoUrl);
-                addLog("📂 Draft restored from local storage.");
             }
         } catch (e) {
             console.error("Failed to restore draft", e);
+            alert("Corrupted draft found and cleared.");
+            localStorage.removeItem('shortmaker_draft');
+            setHasDraft(false);
         }
     };
 
@@ -345,6 +374,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
                         
+                        if (idx === -1) return; // Defensive check
+
                         let url = '';
                         try {
                             url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel);
