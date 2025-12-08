@@ -99,6 +99,7 @@ export interface ShortMakerOutputSettings {
   video_resolution: string; 
   fps: number;
   scene_duration_default: number;
+  visual_source?: 'AI' | 'PEXELS';
   animation?: 'ZOOM' | 'PAN' | 'STATIC';
   captions?: {
       enabled: boolean;
@@ -130,7 +131,7 @@ export interface ShortMakerScene {
   timecodes: ShortMakerTimecodes;
   generated_image_url?: string;
   generated_image_seed?: string;
-  generated_audio_url?: string; // New: Per-scene audio
+  generated_audio_url?: string; 
 }
 
 export interface ShortMakerManifest {

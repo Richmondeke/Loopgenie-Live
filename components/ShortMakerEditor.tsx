@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles, Move } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles, Move, Images } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
@@ -16,6 +16,7 @@ type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'C
 type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
+type VisualSource = 'AI' | 'PEXELS';
 type CaptionStyle = 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
 type AnimationStyle = 'ZOOM' | 'PAN' | 'STATIC';
 
@@ -80,6 +81,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     // Controls
     const [duration, setDuration] = useState<DurationTier>('30s');
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
+    const [visualSource, setVisualSource] = useState<VisualSource>('AI');
     const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
     const [animationStyle, setAnimationStyle] = useState<AnimationStyle>('ZOOM');
     
@@ -318,7 +320,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         setLogs([]);
         setHasDraft(false);
         onBack();
-    }
+    };
 
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -327,7 +329,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         globalSeed: string, 
         style: string, 
         aspectRatio: string, 
-        model: VisualModel
+        model: VisualModel,
+        source: VisualSource
     ) => {
         let url = '';
         let attempts = 0;
@@ -335,7 +338,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
         while (!url && attempts < maxAttempts) {
             try {
-                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model);
+                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model, source);
             } catch (err: any) {
                 if (err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
                      console.warn(`Permission denied for ${model}, switching to fallback.`);
@@ -391,11 +394,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     scriptStyle: scriptStyle
                 });
                 
-                // Set default caption settings based on UI selection
+                // Set settings based on UI selection
                 currentManifest.output_settings.captions = {
                     enabled: captionsEnabled,
                     style: captionStyle
                 };
+                currentManifest.output_settings.visual_source = visualSource;
                 currentManifest.output_settings.animation = animationStyle;
                 
                 setManifest(currentManifest);
@@ -424,7 +428,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             setCompletedImages(workingScenes.length - missingScenes.length);
 
             if (missingScenes.length > 0) {
-                addLog(`🎨 Generating visuals (${missingScenes.length} remaining)...`);
+                addLog(`🎨 Gathering visuals (${missingScenes.length} remaining)...`);
                 
                 const BATCH_SIZE = 2;
                 for (let i = 0; i < missingScenes.length; i += BATCH_SIZE) {
@@ -436,16 +440,16 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                         let url = '';
                         try {
-                            url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel);
+                            url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel, visualSource);
                         } catch (err: any) {
                              if (err.message === 'PERMISSION_DENIED') {
-                                 if (currentVisualModel !== 'flux') {
+                                 if (currentVisualModel !== 'flux' && visualSource === 'AI') {
                                     addLog(`⚠️ Permissions issue. Switching to Flux for subsequent images.`);
                                     currentVisualModel = 'flux';
                                  }
-                                 // Immediate retry with Flux for this scene to save time
+                                 // Immediate retry
                                  try {
-                                     url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
+                                     url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux', visualSource);
                                  } catch(e) {}
                              }
                         }
@@ -453,8 +457,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         if (url) {
                             workingScenes[idx].generated_image_url = url;
                         } 
-                        // If failed, we leave as null/undefined to catch in the Rescue Phase
-                        
                         // Update Store incrementally
                         const currentCount = workingScenes.filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder')).length;
                         jobStore.update({
@@ -480,8 +482,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                     addLog(`⛑️ Rescuing Scene ${scene.scene_number} with fallback...`);
                     try {
-                        // Force Flux for rescue as it is usually more robust for fallback
-                        const url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux');
+                        const url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux', 'AI'); // Fallback to AI Flux even if Pexels failed
                         if (url) {
                             workingScenes[idx].generated_image_url = url;
                             addLog(`✅ Scene ${scene.scene_number} rescued.`);
@@ -505,7 +506,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
-            addLog("✅ Visual generation phase complete.");
+            addLog("✅ Visual phase complete.");
 
             // STEP 3: AUDIO
             setStep('AUDIO');
@@ -583,7 +584,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         shouldRedirect: false
                     });
                     setIsSaved(true);
-                    // FIXED: Do not reset jobStore here. Let user do it manually.
+                    // FIXED: Removed jobStore.reset() to prevent view switching immediately
                     localStorage.removeItem('shortmaker_draft');
                     addLog("💾 Saved to My Projects.");
                 } catch (saveError: any) {
@@ -664,55 +665,56 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Art Style</label>
-                                    <select 
-                                        value={style}
-                                        onChange={(e) => setStyle(e.target.value)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
-                                    >
-                                        <option>Cinematic</option>
-                                        <option>Photorealistic</option>
-                                        <option>Watercolor Illustration</option>
-                                        <option>Anime</option>
-                                        <option>3D Disney Style</option>
-                                        <option>Cyberpunk</option>
-                                        <option>Oil Painting</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Visual Model</label>
-                                    <select 
-                                        value={visualModel}
-                                        onChange={(e) => setVisualModel(e.target.value as VisualModel)}
-                                        className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
-                                    >
-                                        <option value="nano_banana">Nano Banana (Fast)</option>
-                                        <option value="flux">Flux (Creative)</option>
-                                        <option value="gemini_pro">Gemini 3 Pro (HD)</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Duration</label>
-                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700 flex-wrap">
-                                        {(['15s', '30s', '60s', '5m', '10m', '20m'] as DurationTier[]).map(t => (
-                                            <button
-                                                key={t}
-                                                onClick={() => setDuration(t)}
-                                                className={`flex-1 min-w-[30%] py-1.5 rounded-md text-[10px] font-bold transition-all ${
-                                                    duration === t 
-                                                    ? 'bg-gray-700 text-white shadow-sm' 
-                                                    : 'text-gray-500 hover:text-gray-300'
-                                                }`}
-                                            >
-                                                {t} <span className="opacity-50 font-normal ml-0.5">{getCost(t)}c</span>
-                                            </button>
-                                        ))}
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Visual Source</label>
+                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700">
+                                        <button 
+                                            onClick={() => setVisualSource('AI')}
+                                            className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${visualSource === 'AI' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                        >
+                                            Generative AI
+                                        </button>
+                                        <button 
+                                            onClick={() => setVisualSource('PEXELS')}
+                                            className={`flex-1 py-1.5 rounded-md text-xs font-bold transition-all ${visualSource === 'PEXELS' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300'}`}
+                                        >
+                                            Stock (Pexels)
+                                        </button>
                                     </div>
                                 </div>
                             </div>
+
+                            {visualSource === 'AI' && (
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Visual Model</label>
+                                        <select 
+                                            value={visualModel}
+                                            onChange={(e) => setVisualModel(e.target.value as VisualModel)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
+                                        >
+                                            <option value="nano_banana">Nano Banana (Fast)</option>
+                                            <option value="flux">Flux (Creative)</option>
+                                            <option value="gemini_pro">Gemini 3 Pro (HD)</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Art Style</label>
+                                        <select 
+                                            value={style}
+                                            onChange={(e) => setStyle(e.target.value)}
+                                            className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
+                                        >
+                                            <option>Cinematic</option>
+                                            <option>Photorealistic</option>
+                                            <option>Watercolor Illustration</option>
+                                            <option>Anime</option>
+                                            <option>3D Disney Style</option>
+                                            <option>Cyberpunk</option>
+                                            <option>Oil Painting</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            )}
                             
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
@@ -739,27 +741,46 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Motion Style</label>
-                                    <div className="flex gap-2">
-                                        {[
-                                            { id: 'ZOOM', label: 'Zoom', icon: Move },
-                                            { id: 'PAN', label: 'Pan', icon: Move },
-                                            { id: 'STATIC', label: 'Static', icon: Square }
-                                        ].map((anim) => (
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Duration</label>
+                                    <div className="flex bg-black/40 rounded-lg p-1 border border-gray-700 flex-wrap">
+                                        {(['15s', '30s', '60s', '5m', '10m', '20m'] as DurationTier[]).map(t => (
                                             <button
-                                                key={anim.id}
-                                                onClick={() => setAnimationStyle(anim.id as AnimationStyle)}
-                                                className={`flex-1 py-2 px-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all ${
-                                                    animationStyle === anim.id
-                                                    ? 'bg-purple-900/20 border-purple-500 text-purple-200'
-                                                    : 'bg-black/40 border-gray-700 text-gray-500 hover:bg-gray-800'
+                                                key={t}
+                                                onClick={() => setDuration(t)}
+                                                className={`flex-1 min-w-[30%] py-1.5 rounded-md text-[10px] font-bold transition-all ${
+                                                    duration === t 
+                                                    ? 'bg-gray-700 text-white shadow-sm' 
+                                                    : 'text-gray-500 hover:text-gray-300'
                                                 }`}
                                             >
-                                                <anim.icon size={14} />
-                                                <span className="text-[10px] font-medium">{anim.label}</span>
+                                                {t} <span className="opacity-50 font-normal ml-0.5">{getCost(t)}c</span>
                                             </button>
                                         ))}
                                     </div>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Motion Style</label>
+                                <div className="flex gap-2">
+                                    {[
+                                        { id: 'ZOOM', label: 'Zoom', icon: Move },
+                                        { id: 'PAN', label: 'Pan', icon: Move },
+                                        { id: 'STATIC', label: 'Static', icon: Square }
+                                    ].map((anim) => (
+                                        <button
+                                            key={anim.id}
+                                            onClick={() => setAnimationStyle(anim.id as AnimationStyle)}
+                                            className={`flex-1 py-2 px-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all ${
+                                                animationStyle === anim.id
+                                                ? 'bg-purple-900/20 border-purple-500 text-purple-200'
+                                                : 'bg-black/40 border-gray-700 text-gray-500 hover:bg-gray-800'
+                                            }`}
+                                        >
+                                            <anim.icon size={14} />
+                                            <span className="text-[10px] font-medium">{anim.label}</span>
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         </div>
@@ -913,7 +934,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                  <div className="flex-1 p-4 overflow-y-auto space-y-2 custom-scrollbar">
                      <StepIndicator current={step} target="SCRIPT" label="Writing Script" icon={Edit2} />
-                     <StepIndicator current={step} target="VISUALS" label={`Generating Visuals (${completedImages}/${totalVisualsToGen})`} icon={ImageIcon} />
+                     <StepIndicator current={step} target="VISUALS" label={`Gathering Visuals (${completedImages}/${totalVisualsToGen})`} icon={ImageIcon} />
                      <StepIndicator current={step} target="AUDIO" label="Synthesizing Voice" icon={Mic} />
                      <StepIndicator current={step} target="ASSEMBLY" label="Stitching Video" icon={Film} />
                      

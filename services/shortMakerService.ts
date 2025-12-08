@@ -3,6 +3,7 @@ import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames, concatenateVideos, AdvancedScene } from "./ffmpegService";
 import { generateSpeech, combineAudioSegments } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
+import { searchPexels } from "./mockAssetService";
 
 // ==========================================
 // 0. BACKGROUND JOB STORE (Singleton)
@@ -381,7 +382,8 @@ export const generateSceneImage = async (
     globalSeed: string, 
     styleTone?: string,
     aspectRatio: string = '9:16',
-    model: 'nano_banana' | 'flux' | 'gemini_pro' = 'nano_banana'
+    model: 'nano_banana' | 'flux' | 'gemini_pro' = 'nano_banana',
+    source: 'AI' | 'PEXELS' = 'AI'
 ): Promise<string> => {
     
     const style = styleTone || 'Cinematic';
@@ -393,6 +395,25 @@ export const generateSceneImage = async (
     if (!basePrompt || basePrompt.trim().length < 5) {
         basePrompt = scene.visual_description || scene.narration_text || "A cinematic scene";
     }
+    
+    // PEXELS PATH
+    if (source === 'PEXELS') {
+        try {
+            // Simplify prompt for Pexels search (remove robust modifiers)
+            const searchTerms = basePrompt.split(',')[0].substring(0, 100); 
+            const results = await searchPexels(searchTerms);
+            if (results && results.length > 0) {
+                // Randomly pick one of the top 3 to add variety if regenerating
+                const pick = results[Math.floor(Math.random() * Math.min(3, results.length))];
+                return pick.fullUrl;
+            }
+            console.warn("Pexels found no results, falling back to AI.");
+        } catch(e) {
+            console.warn("Pexels failed, falling back to AI", e);
+        }
+    }
+
+    // AI GENERATION PATH
     // Truncate to prevent token limit crashes (though Gemini allows large context, safety first)
     if (basePrompt.length > 1500) basePrompt = basePrompt.substring(0, 1500);
 
