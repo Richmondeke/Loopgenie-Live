@@ -96,9 +96,10 @@ export interface ScriptGenerationRequest {
 // --- ShortMaker Types ---
 
 export interface ShortMakerOutputSettings {
-  video_resolution: string; // Changed from strict union to string to support more ratios
+  video_resolution: string; 
   fps: number;
   scene_duration_default: number;
+  animation?: 'ZOOM' | 'PAN' | 'STATIC';
   captions?: {
       enabled: boolean;
       style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
@@ -129,6 +130,7 @@ export interface ShortMakerScene {
   timecodes: ShortMakerTimecodes;
   generated_image_url?: string;
   generated_image_seed?: string;
+  generated_audio_url?: string; // New: Per-scene audio
 }
 
 export interface ShortMakerManifest {

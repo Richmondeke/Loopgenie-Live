@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles, Move } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
@@ -17,6 +17,7 @@ type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
 type CaptionStyle = 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
+type AnimationStyle = 'ZOOM' | 'PAN' | 'STATIC';
 
 const VOICES = [
     { id: 'Fenrir', label: 'Fenrir', gender: 'Male', tone: 'Deep, Epic', desc: 'Movie trailer voice' },
@@ -80,6 +81,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [duration, setDuration] = useState<DurationTier>('30s');
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
     const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
+    const [animationStyle, setAnimationStyle] = useState<AnimationStyle>('ZOOM');
     
     // Captions State
     const [captionsEnabled, setCaptionsEnabled] = useState(true);
@@ -383,6 +385,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     enabled: captionsEnabled,
                     style: captionStyle
                 };
+                currentManifest.output_settings.animation = animationStyle;
                 
                 setManifest(currentManifest);
                 addLog(`✅ Script ready: "${currentManifest.title}" with ${currentManifest.scenes.length} scenes.`);
@@ -495,24 +498,25 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             // STEP 3: AUDIO
             setStep('AUDIO');
-            let generatedAudioUrl = currentManifest.generated_audio_url || '';
+            
+            // Check if audio needs generation (if any scene lacks audio url)
+            const needsAudio = currentManifest.scenes.some(s => !s.generated_audio_url);
 
-            if (!generatedAudioUrl) {
+            if (needsAudio) {
                 addLog(`🎙️ Synthesizing voiceover (${selectedVoice})...`);
                 const elevenKey = localStorage.getItem('genavatar_eleven_key');
                 try {
-                    const audioRes = await synthesizeAudio(
+                    const updatedManifest = await synthesizeAudio(
                         currentManifest, 
                         elevenKey || undefined, 
                         selectedVoice 
                     );
-                    generatedAudioUrl = audioRes.audioUrl;
+                    currentManifest = updatedManifest; // Update with audio URLs
                     addLog(`✅ Audio recording complete.`);
-                } catch (err) {
+                } catch (err: any) {
                     console.warn(err);
-                    addLog("⚠️ Audio issues, attempting fallback...");
+                    addLog("⚠️ Audio issues: " + err.message);
                 }
-                currentManifest = { ...currentManifest, generated_audio_url: generatedAudioUrl };
                 
                 // Update Store
                 jobStore.update({ manifest: currentManifest });
@@ -524,7 +528,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             if (resume && videoUrl) {
                  addLog("⏩ Video already built.");
             } else {
-                addLog("🎬 Stitching video... (This may take a while for long videos)");
+                addLog("🎬 Stitching video... (Syncing scene duration to voiceover)");
                 
                 // Ensure caption settings are up to date from UI if resuming or starting late
                 if (!currentManifest.output_settings.captions) {
@@ -533,6 +537,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         style: captionStyle
                     };
                 }
+                currentManifest.output_settings.animation = animationStyle;
 
                 const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
@@ -698,27 +703,52 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </div>
                             </div>
                             
-                            <div>
-                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Aspect Ratio</label>
-                                <div className="flex gap-3">
-                                    {[
-                                        { id: '9:16', icon: RectangleVertical, label: 'Portrait' },
-                                        { id: '16:9', icon: RectangleHorizontal, label: 'Landscape' },
-                                        { id: '1:1', icon: Square, label: 'Square' }
-                                    ].map((item) => (
-                                        <button
-                                            key={item.id}
-                                            onClick={() => setAspectRatio(item.id as AspectRatio)}
-                                            className={`flex-1 py-2 px-3 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all ${
-                                                aspectRatio === item.id
-                                                ? 'bg-blue-900/20 border-blue-500 text-blue-200'
-                                                : 'bg-black/40 border-gray-700 text-gray-500 hover:bg-gray-800'
-                                            }`}
-                                        >
-                                            <item.icon size={16} />
-                                            <span className="text-[10px] font-medium">{item.label}</span>
-                                        </button>
-                                    ))}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Aspect Ratio</label>
+                                    <div className="flex gap-2">
+                                        {[
+                                            { id: '9:16', icon: RectangleVertical, label: '9:16' },
+                                            { id: '16:9', icon: RectangleHorizontal, label: '16:9' },
+                                            { id: '1:1', icon: Square, label: '1:1' }
+                                        ].map((item) => (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => setAspectRatio(item.id as AspectRatio)}
+                                                className={`flex-1 py-2 px-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all ${
+                                                    aspectRatio === item.id
+                                                    ? 'bg-blue-900/20 border-blue-500 text-blue-200'
+                                                    : 'bg-black/40 border-gray-700 text-gray-500 hover:bg-gray-800'
+                                                }`}
+                                            >
+                                                <item.icon size={14} />
+                                                <span className="text-[10px] font-medium">{item.label}</span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Animation Style</label>
+                                    <div className="flex gap-2">
+                                        {[
+                                            { id: 'ZOOM', label: 'Slow Zoom', icon: Move },
+                                            { id: 'PAN', label: 'Pan', icon: Move },
+                                            { id: 'STATIC', label: 'Static', icon: Square }
+                                        ].map((anim) => (
+                                            <button
+                                                key={anim.id}
+                                                onClick={() => setAnimationStyle(anim.id as AnimationStyle)}
+                                                className={`flex-1 py-2 px-2 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all ${
+                                                    animationStyle === anim.id
+                                                    ? 'bg-purple-900/20 border-purple-500 text-purple-200'
+                                                    : 'bg-black/40 border-gray-700 text-gray-500 hover:bg-gray-800'
+                                                }`}
+                                            >
+                                                <anim.icon size={14} />
+                                                <span className="text-[10px] font-medium">{anim.label}</span>
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -853,7 +883,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
-    // ... Rest of the component (preview view) remains largely the same but uses dynamic class for video container
+    // ... (rest of component remains same) ...
     return (
         <div className="h-full bg-black text-white flex flex-col md:flex-row overflow-hidden">
              {/* Left Progress Panel */}

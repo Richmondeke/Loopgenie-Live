@@ -1,6 +1,6 @@
 import { invokeGemini } from "./geminiService";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
-import { stitchVideoFrames, concatenateVideos } from "./ffmpegService";
+import { stitchVideoFrames, concatenateVideos, AdvancedScene } from "./ffmpegService";
 import { generateSpeech, combineAudioSegments } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
 
@@ -128,7 +128,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
                   video_resolution: targetResolution,
                   fps: 30,
                   scene_duration_default: 5,
-                  captions: { enabled: true, style: 'BOXED' } // Default
+                  captions: { enabled: true, style: 'BOXED' },
+                  animation: 'ZOOM' // Default
               };
               
               jobStore.update({ manifest: result });
@@ -170,7 +171,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
           video_resolution: targetResolution, 
           fps: 30, 
           scene_duration_default: 5,
-          captions: { enabled: true, style: 'BOXED' }
+          captions: { enabled: true, style: 'BOXED' },
+          animation: 'ZOOM'
       },
       scenes: []
   };
@@ -203,7 +205,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
                         video_resolution: targetResolution, // STRICT FORCE
                         fps: 30,
                         scene_duration_default: 5,
-                        captions: { enabled: true, style: 'BOXED' }
+                        captions: { enabled: true, style: 'BOXED' },
+                        animation: 'ZOOM'
                     }
                 };
             }
@@ -444,52 +447,61 @@ export const synthesizeAudio = async (
     manifest: ShortMakerManifest, 
     elevenApiKey?: string,
     preferredVoice: string = "Fenrir"
-): Promise<{ audioUrl: string, duration: number }> => {
-    
+): Promise<ShortMakerManifest> => {
+    // Generate individual audio clips per scene to ensure sync
+    const updatedScenes = [...manifest.scenes];
     const audioSegments: string[] = [];
-    let totalWords = 0;
     
     // Sync status with store
     jobStore.update({ status: 'NARRATING' });
 
-    const MAX_CONCURRENT = 5;
-    for (let i = 0; i < manifest.scenes.length; i += MAX_CONCURRENT) {
-        jobStore.addLog(`Synthesizing audio batch ${i+1}...`);
-        const batch = manifest.scenes.slice(i, i + MAX_CONCURRENT);
-        const promises = batch.map(async (scene) => {
-            if (!scene.narration_text) return null;
+    const MAX_CONCURRENT = 3; // Reduced concurrency for stability
+    for (let i = 0; i < updatedScenes.length; i += MAX_CONCURRENT) {
+        jobStore.addLog(`Synthesizing audio for scenes ${i+1} to ${Math.min(i+MAX_CONCURRENT, updatedScenes.length)}...`);
+        const batchIndices = updatedScenes.slice(i, i + MAX_CONCURRENT).map((_, idx) => i + idx);
+        
+        await Promise.all(batchIndices.map(async (sceneIdx) => {
+            const scene = updatedScenes[sceneIdx];
+            if (!scene.narration_text) return;
+            
             try {
-                return await generateSpeech(scene.narration_text, preferredVoice);
+                const audioUrl = await generateSpeech(scene.narration_text, preferredVoice);
+                updatedScenes[sceneIdx].generated_audio_url = audioUrl;
+                audioSegments.push(audioUrl);
             } catch (e) {
                 console.warn(`TTS failed for scene ${scene.scene_number}`, e);
-                return null;
             }
-        });
+        }));
         
-        const results = await Promise.all(promises);
-        results.forEach(res => {
-            if (res) audioSegments.push(res);
-        });
-        
-        batch.forEach(s => totalWords += (s.narration_text || '').split(' ').length);
-        
-        // Small break
+        // Small break to respect rate limits
         await new Promise(r => setTimeout(r, 500));
     }
     
+    // Also combine for global reference if needed, though stitcher will use per-scene
+    let combinedUrl = '';
     if (audioSegments.length > 0) {
-        const combinedUrl = combineAudioSegments(audioSegments);
-        return { audioUrl: combinedUrl, duration: totalWords / 2.5 };
+        combinedUrl = combineAudioSegments(audioSegments);
     }
     
-    throw new Error("TTS generation failed completely.");
+    const updatedManifest = {
+        ...manifest,
+        scenes: updatedScenes,
+        generated_audio_url: combinedUrl
+    };
+
+    jobStore.update({ manifest: updatedManifest });
+    return updatedManifest;
 };
 
 export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusicUrl?: string): Promise<string> => {
-    const scenes = manifest.scenes.filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder')).map(s => ({
-        imageUrl: s.generated_image_url as string,
-        text: s.narration_text || ""
-    }));
+    // Filter scenes that have at least an image
+    const scenes: AdvancedScene[] = manifest.scenes
+        .filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder'))
+        .map(s => ({
+            imageUrl: s.generated_image_url as string,
+            text: s.narration_text || "",
+            audioUrl: s.generated_audio_url // Pass individual audio URL
+        }));
 
     if (scenes.length === 0) throw new Error("No valid images generated to assemble video");
 
@@ -509,18 +521,20 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
 
     // Default to 'BOXED' if undefined
     const captionSettings = manifest.output_settings.captions || { enabled: true, style: 'BOXED' };
+    const animationStyle = manifest.output_settings.animation || 'ZOOM';
 
-    const CHUNK_SIZE = 15;
+    const CHUNK_SIZE = 10; // Smaller chunk size for safety with heavy audio processing
     
     if (scenes.length <= CHUNK_SIZE) {
         return await stitchVideoFrames(
             scenes, 
-            manifest.generated_audio_url, 
+            undefined, // No global audio, using per-scene
             undefined, 
-            width, // explicit width
-            height, // explicit height
+            width, 
+            height, 
             backgroundMusicUrl,
-            captionSettings // Pass captions
+            captionSettings,
+            animationStyle
         );
     }
 
@@ -533,19 +547,14 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         try {
             const chunkUrl = await stitchVideoFrames(
                 chunkScenes, 
-                undefined, // Audio chunking logic needed if splitting audio, usually easier to mix audio at end or split narration. 
-                // Note: Splitting audio perfectly for chunks is complex client side. 
-                // For long video MVP we might need to rely on per-chunk audio or simple slideshow timing if audio is one big blob.
-                // Assuming for now chunks are just visual + silent, mixed later?
-                // Actually, existing logic for long video seems to lack audio chunking. 
-                // For MVP robustness, let's keep audio undefined here and assume 5000ms visual only per chunk if audio too long?
-                // Ideally, `assembleVideo` needs to split audio.
-                // For this fix request (Concatenation), we focus on resolution. 
+                undefined, 
                 5000, 
                 width, 
                 height,
-                undefined,
-                captionSettings
+                undefined, // Only apply BG music at final concatenation if needed, or pass it here? Better at final merge usually, but we are concatenating video streams.
+                           // Actually, ffmpegService concatenateVideos supports bgAudio.
+                captionSettings,
+                animationStyle
             ); 
             videoChunks.push(chunkUrl);
         } catch (e) {
@@ -555,6 +564,5 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     }
 
     jobStore.addLog("Merging all video chunks...");
-    // Pass audio URL to merge logic if it exists, so it's overlaid on the concatenated video
-    return await concatenateVideos(videoChunks, width, height, manifest.generated_audio_url);
+    return await concatenateVideos(videoChunks, width, height, backgroundMusicUrl);
 };

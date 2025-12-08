@@ -4,6 +4,11 @@ export interface VideoScene {
     text: string;
 }
 
+export interface AdvancedScene extends VideoScene {
+    audioUrl?: string;
+    durationMs?: number;
+}
+
 export interface CaptionSettings {
     enabled: boolean;
     style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
@@ -31,6 +36,13 @@ const loadVideo = (src: string): Promise<HTMLVideoElement> => {
         vid.onerror = (e) => reject(e);
         vid.load();
     });
+};
+
+// Helper to get audio buffer and duration
+const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer> => {
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    return await ctx.decodeAudioData(buf);
 };
 
 /**
@@ -176,15 +188,17 @@ const drawCaptions = (
 
 /**
  * Stitches images and audio into a video CLIENT-SIDE using HTML5 Canvas and MediaRecorder.
+ * Now supports per-scene timing based on audio duration.
  */
 export const stitchVideoFrames = async (
-  scenes: VideoScene[], 
-  audioUrl: string | undefined, 
-  durationPerImageMs: number = 5000,
+  scenes: AdvancedScene[], 
+  globalAudioUrl: string | undefined, 
+  defaultDurationPerImageMs: number = 5000,
   targetWidth?: number,
   targetHeight?: number,
   backgroundAudioUrl?: string,
-  captionSettings?: CaptionSettings
+  captionSettings?: CaptionSettings,
+  animationStyle: 'ZOOM' | 'PAN' | 'STATIC' = 'ZOOM'
 ): Promise<string> => {
   console.log("Starting client-side video stitching...");
 
@@ -222,70 +236,88 @@ export const stitchVideoFrames = async (
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, width, height);
 
-        // 2. Prepare Audio (Mixing Narration + BG Music)
-        let audioContext: AudioContext | null = null;
-        let dest: MediaStreamAudioDestinationNode | null = null;
-        let narrationSource: AudioBufferSourceNode | null = null;
-        let bgMusicSource: AudioBufferSourceNode | null = null;
+        // 2. Prepare Audio Context
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const audioContext = new AudioContextClass();
+        const dest = audioContext.createMediaStreamDestination();
 
-        // Initialize AudioContext if we have any audio
-        if (audioUrl || backgroundAudioUrl) {
-            try {
-                const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-                audioContext = new AudioContextClass();
-                dest = audioContext.createMediaStreamDestination();
+        // 3. Process Scenes & Timing
+        // We need to calculate duration for each scene BEFORE rendering loop.
+        const sceneMeta: { durationMs: number, startMs: number, audioBuf?: AudioBuffer }[] = [];
+        let accumulatedMs = 0;
 
-                // A. Load Narration (Voiceover)
-                if (audioUrl) {
-                    const res = await fetch(audioUrl);
-                    const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
-                    
-                    // Recalculate duration based on narration length
-                    if (buf.duration && buf.duration > 1) {
-                        durationPerImageMs = (buf.duration * 1000) / scenes.length;
-                        console.log(`Adjusted duration per scene to ${Math.round(durationPerImageMs)}ms based on narration.`);
-                    }
+        // Preload images
+        const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
 
-                    narrationSource = audioContext.createBufferSource();
-                    narrationSource.buffer = buf;
-                    narrationSource.connect(dest);
+        // Preload and schedule audio
+        for (let i = 0; i < scenes.length; i++) {
+            const scene = scenes[i];
+            let duration = defaultDurationPerImageMs;
+            let buffer: AudioBuffer | undefined = undefined;
+
+            // If scene has specific audio, load it and use its duration
+            if (scene.audioUrl) {
+                try {
+                    buffer = await loadAudioBuffer(audioContext, scene.audioUrl);
+                    // Extend duration to fit audio, with 1s buffer if needed
+                    const audioDurationMs = buffer.duration * 1000;
+                    // Ensure minimum 1 second or match audio
+                    duration = Math.max(1000, audioDurationMs);
+                } catch(e) {
+                    console.warn(`Failed to load audio for scene ${i}, using default duration.`);
                 }
-
-                // B. Load Background Music
-                if (backgroundAudioUrl) {
-                    try {
-                        const res = await fetch(backgroundAudioUrl);
-                        const buf = await audioContext.decodeAudioData(await res.arrayBuffer());
-                        
-                        bgMusicSource = audioContext.createBufferSource();
-                        bgMusicSource.buffer = buf;
-                        bgMusicSource.loop = true; // Loop music if short
-
-                        // Create Gain Node for Volume Ducking (12% volume)
-                        const bgGain = audioContext.createGain();
-                        bgGain.gain.value = 0.12; 
-
-                        bgMusicSource.connect(bgGain);
-                        bgGain.connect(dest);
-                    } catch (bgError) {
-                        console.warn("Failed to load background music:", bgError);
-                    }
-                }
-
-            } catch (e) {
-                console.error("Error preparing audio context:", e);
+            } else if (globalAudioUrl) {
+                // If using one global file, we blindly split time (legacy mode)
+                // Assuming global audio is already loaded elsewhere or passed
+                // For logic consistency, we stick to default duration here if global
             }
+
+            // Schedule audio node if buffer exists
+            if (buffer) {
+                const source = audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(dest);
+                source.start(accumulatedMs / 1000);
+            }
+
+            sceneMeta.push({
+                durationMs: duration,
+                startMs: accumulatedMs,
+                audioBuf: buffer
+            });
+            accumulatedMs += duration;
         }
 
-        // 3. Prepare Recorder
-        const canvasStream = canvas.captureStream(30); // 30 FPS
-        const combinedTracks = [...canvasStream.getVideoTracks()];
-        
-        if (dest) {
-            const audioTracks = dest.stream.getAudioTracks();
-            combinedTracks.push(...audioTracks);
+        // Handle Global/Background Audio
+        if (globalAudioUrl && !scenes.some(s => s.audioUrl)) {
+             try {
+                const buf = await loadAudioBuffer(audioContext, globalAudioUrl);
+                const source = audioContext.createBufferSource();
+                source.buffer = buf;
+                source.connect(dest);
+                source.start(0);
+                // Adjust total duration if global audio is longer? 
+                // Usually visual drives duration in this mode.
+             } catch(e) { console.warn("Global audio fail"); }
         }
-        
+
+        if (backgroundAudioUrl) {
+            try {
+                const buf = await loadAudioBuffer(audioContext, backgroundAudioUrl);
+                const bgSource = audioContext.createBufferSource();
+                bgSource.buffer = buf;
+                bgSource.loop = true;
+                const bgGain = audioContext.createGain();
+                bgGain.gain.value = 0.12; 
+                bgSource.connect(bgGain);
+                bgGain.connect(dest);
+                bgSource.start(0);
+            } catch(e) { console.warn("BG audio fail"); }
+        }
+
+        // 4. Prepare Recorder
+        const canvasStream = canvas.captureStream(30); // 30 FPS
+        const combinedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
         const combinedStream = new MediaStream(combinedTracks);
         
         const mimeTypes = [
@@ -298,7 +330,7 @@ export const stitchVideoFrames = async (
 
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 3500000 // 3.5 Mbps
+            videoBitsPerSecond: 5000000 // 5 Mbps
         });
 
         const chunks: Blob[] = [];
@@ -314,44 +346,50 @@ export const stitchVideoFrames = async (
             resolve(url);
         };
 
-        // 4. Start Recording & Audio
+        // 5. Start Recording loop
         recorder.start();
-        if (narrationSource) narrationSource.start(0);
-        if (bgMusicSource) bgMusicSource.start(0);
-
-        // Preload all images to avoid stutter
-        const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
-
-        // Animation Loop Variables
+        
+        // Loop Vars
         const fps = 30;
-        const framesPerScene = Math.ceil((durationPerImageMs / 1000) * fps);
-        const maxTotalFrames = (framesPerScene * scenes.length) + (fps * 2); // Buffer
-        
         let currentSceneIdx = 0;
-        let currentFrameInScene = 0;
-        let totalFramesRendered = 0;
-        let startTime = performance.now();
-        
-        const drawFrame = () => {
-            // Robust loop check
-            if (recorder.state === 'inactive') return;
+        let sceneStartTime = performance.now(); // For delta timing within rendering logic (simulated)
+        let totalElapsedMs = 0;
+        let startRenderTime = performance.now();
 
-            // Stop if done
-            if (currentSceneIdx >= scenes.length || totalFramesRendered > maxTotalFrames) {
+        const drawFrame = () => {
+            // Check limits
+            if (currentSceneIdx >= scenes.length || recorder.state === 'inactive') {
                 recorder.stop();
                 return;
             }
 
+            const scene = scenes[currentSceneIdx];
+            const meta = sceneMeta[currentSceneIdx];
             const img = loadedImages[currentSceneIdx];
-            const text = scenes[currentSceneIdx].text;
             
-            // --- Ken Burns Effect Logic ---
-            const progress = currentFrameInScene / framesPerScene;
-            const scale = 1.0 + (progress * 0.15); 
+            // Calculate progress in current scene
+            const sceneProgress = (totalElapsedMs - meta.startMs) / meta.durationMs;
             
-            const panDirection = currentSceneIdx % 2 === 0 ? 1 : -1;
-            const maxPanX = width * 0.05;
-            const translateX = (progress * maxPanX * panDirection) - (panDirection > 0 ? 0 : maxPanX);
+            // --- ANIMATION LOGIC ---
+            // Common scaling setup
+            let scale = 1.0;
+            let translateX = 0;
+            let translateY = 0;
+
+            if (animationStyle === 'ZOOM') {
+                // Ken Burns Zoom In
+                scale = 1.0 + (sceneProgress * 0.15); // Zoom from 1.0 to 1.15
+            } else if (animationStyle === 'PAN') {
+                // Gentle Pan
+                scale = 1.15; // Start slightly zoomed in
+                const panRange = width * 0.05;
+                // Pan direction alternates
+                const direction = currentSceneIdx % 2 === 0 ? 1 : -1;
+                translateX = (sceneProgress * panRange * direction) - (panRange / 2 * direction);
+            } else {
+                // STATIC
+                scale = 1.0;
+            }
 
             // Draw Background
             ctx.fillStyle = 'black';
@@ -362,12 +400,13 @@ export const stitchVideoFrames = async (
             ctx.translate(width / 2, height / 2);
             ctx.scale(scale, scale);
             ctx.translate(-width / 2, -height / 2);
-            ctx.translate(translateX, 0);
+            ctx.translate(translateX, translateY);
 
             const imgRatio = img.naturalWidth / img.naturalHeight;
             const canvasRatio = width / height;
             let renderW, renderH, offsetX, offsetY;
 
+            // Cover logic
             if (imgRatio > canvasRatio) {
                 renderH = height;
                 renderW = height * imgRatio;
@@ -383,27 +422,34 @@ export const stitchVideoFrames = async (
             ctx.restore();
 
             // --- Draw Captions ---
-            drawCaptions(ctx, text, width, height, captionSettings);
+            drawCaptions(ctx, scene.text, width, height, captionSettings);
 
-            // Loop Logic
-            currentFrameInScene++;
-            totalFramesRendered++;
-            
-            if (currentFrameInScene >= framesPerScene) {
+            // Time Management
+            // We increment fixed time step for smooth video file even if render is slow
+            const msPerFrame = 1000 / fps;
+            totalElapsedMs += msPerFrame;
+
+            // Check if scene complete
+            if (totalElapsedMs >= meta.startMs + meta.durationMs) {
                 currentSceneIdx++;
-                currentFrameInScene = 0;
             }
 
-            // High-precision timing loop
-            // Calculate when the next frame *should* be
-            const elapsed = performance.now() - startTime;
-            const targetTime = totalFramesRendered * (1000 / fps);
-            const delay = Math.max(0, targetTime - elapsed);
+            // Request next frame
+            // To prevent browser throttling, we can use a tight loop with setImmediate/setTimeout(0) in a Worker,
+            // but for main thread, we try to align with AF. 
+            // However, MediaRecorder captures real-time. If we draw faster than real-time, it might look fast.
+            // We need to sync our "virtual" totalElapsedMs with "wall clock" time to ensure MediaRecorder records proper speed.
             
-            setTimeout(() => requestAnimationFrame(drawFrame), delay);
+            const wallClockElapsed = performance.now() - startRenderTime;
+            const drift = totalElapsedMs - wallClockElapsed;
+            
+            if (drift > 0) {
+                setTimeout(() => requestAnimationFrame(drawFrame), drift);
+            } else {
+                requestAnimationFrame(drawFrame);
+            }
         };
 
-        // Start Loop
         requestAnimationFrame(drawFrame);
 
     } catch (err) {
