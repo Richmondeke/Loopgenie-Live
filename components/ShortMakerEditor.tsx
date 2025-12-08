@@ -309,6 +309,17 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
+    const handleStartNew = () => {
+        jobStore.reset();
+        localStorage.removeItem('shortmaker_draft');
+        setManifest(null);
+        setStep('INPUT');
+        setVideoUrl(null);
+        setLogs([]);
+        setHasDraft(false);
+        onBack();
+    }
+
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
     const generateImageWithRetry = async (
@@ -572,7 +583,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                         shouldRedirect: false
                     });
                     setIsSaved(true);
-                    jobStore.reset(); // Clear store on successful save
+                    // FIXED: Do not reset jobStore here. Let user do it manually.
                     localStorage.removeItem('shortmaker_draft');
                     addLog("💾 Saved to My Projects.");
                 } catch (saveError: any) {
@@ -728,10 +739,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Animation Style</label>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Motion Style</label>
                                     <div className="flex gap-2">
                                         {[
-                                            { id: 'ZOOM', label: 'Slow Zoom', icon: Move },
+                                            { id: 'ZOOM', label: 'Zoom', icon: Move },
                                             { id: 'PAN', label: 'Pan', icon: Move },
                                             { id: 'STATIC', label: 'Static', icon: Square }
                                         ].map((anim) => (
@@ -955,7 +966,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                      <button onClick={() => runProduction(true)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
                                          Regenerate
                                      </button>
-                                     <button onClick={onBack} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
+                                     <button onClick={handleStartNew} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
                                          Start New
                                      </button>
                                  </div>
