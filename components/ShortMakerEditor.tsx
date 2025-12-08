@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
 import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
@@ -16,6 +16,7 @@ type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'C
 type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
 type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
+type CaptionStyle = 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
 
 const VOICES = [
     { id: 'Fenrir', label: 'Fenrir', gender: 'Male', tone: 'Deep, Epic', desc: 'Movie trailer voice' },
@@ -35,6 +36,35 @@ const SCRIPT_STYLES = [
     { id: 'Documentary', label: 'Mini-Documentary', desc: 'In-depth, structured storytelling.' },
 ];
 
+const CAPTION_STYLES: { id: CaptionStyle; label: string }[] = [
+    { id: 'BOXED', label: 'Boxed (Default)' },
+    { id: 'OUTLINE', label: 'Outline (Meme)' },
+    { id: 'MINIMAL', label: 'Minimal (Clean)' },
+    { id: 'HIGHLIGHT', label: 'Highlight (Pop)' },
+];
+
+const StepIndicator = ({ current, target, label, icon: Icon }: { current: ProductionStep, target: ProductionStep, label: string, icon: any }) => {
+    const steps: ProductionStep[] = ['INPUT', 'SCRIPT', 'VISUALS', 'AUDIO', 'ASSEMBLY', 'COMPLETE'];
+    const cIdx = steps.indexOf(current);
+    const tIdx = steps.indexOf(target);
+    
+    const isActive = current === target;
+    const isDone = cIdx > tIdx;
+    
+    return (
+        <div className={`flex items-center gap-3 p-3 rounded-xl transition-all ${isActive ? 'bg-gray-800 border border-gray-700' : 'opacity-60'}`}>
+            <div className={`p-2 rounded-lg ${isActive ? 'bg-indigo-600 text-white' : isDone ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-400'}`}>
+                <Icon size={16} />
+            </div>
+            <div className="flex-1">
+                <div className={`text-xs font-bold ${isActive ? 'text-white' : 'text-gray-400'}`}>{label}</div>
+                {isActive && <div className="h-1 w-full bg-gray-700 rounded-full mt-1 overflow-hidden"><div className="h-full bg-indigo-500 animate-pulse w-1/2"></div></div>}
+            </div>
+            {isDone && <CheckCircle size={14} className="text-green-500" />}
+        </div>
+    );
+};
+
 export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
     const isStorybook = template.mode === 'STORYBOOK';
     const [step, setStep] = useState<ProductionStep>('INPUT');
@@ -51,6 +81,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
     const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
     
+    // Captions State
+    const [captionsEnabled, setCaptionsEnabled] = useState(true);
+    const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('BOXED');
+
     // Audio Settings
     const [selectedVoice, setSelectedVoice] = useState('Fenrir');
     const [bgMusic, setBgMusic] = useState<string | null>(null);
@@ -71,6 +105,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [hasDraft, setHasDraft] = useState(false);
 
     const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Helper for safe scenes access
+    const safeScenes = manifest?.scenes || [];
 
     // --- EFFECT: Reset Aspect Ratio on Template Change ---
     useEffect(() => {
@@ -341,6 +378,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     scriptStyle: scriptStyle
                 });
                 
+                // Set default caption settings based on UI selection
+                currentManifest.output_settings.captions = {
+                    enabled: captionsEnabled,
+                    style: captionStyle
+                };
+                
                 setManifest(currentManifest);
                 addLog(`✅ Script ready: "${currentManifest.title}" with ${currentManifest.scenes.length} scenes.`);
             }
@@ -483,6 +526,14 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             } else {
                 addLog("🎬 Stitching video... (This may take a while for long videos)");
                 
+                // Ensure caption settings are up to date from UI if resuming or starting late
+                if (!currentManifest.output_settings.captions) {
+                    currentManifest.output_settings.captions = {
+                        enabled: captionsEnabled,
+                        style: captionStyle
+                    };
+                }
+
                 const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
                 setVideoUrl(finalVideoUrl);
                 jobStore.update({ videoUrl: finalVideoUrl, status: 'COMPLETED' });
@@ -535,30 +586,15 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
-    const StepIndicator = ({ current, target, label, icon: Icon }: any) => {
-        const steps = ['INPUT', 'SCRIPT', 'VISUALS', 'AUDIO', 'ASSEMBLY', 'COMPLETE'];
-        const currentIndex = steps.indexOf(current);
-        const targetIndex = steps.indexOf(target);
-        
-        let statusColor = 'text-gray-600 bg-gray-800 border-gray-700'; 
-        if (current === target) statusColor = 'text-blue-400 bg-blue-900/30 border-blue-500 animate-pulse'; 
-        if (currentIndex > targetIndex) statusColor = 'text-green-400 bg-green-900/30 border-green-500'; 
-
-        return (
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-bold transition-all ${statusColor}`}>
-                {currentIndex > targetIndex ? <CheckCircle size={14} /> : <Icon size={14} />}
-                <span className="hidden sm:inline">{label}</span>
-            </div>
-        );
+    const getPreviewClass = () => {
+        // Base container styles for the video player
+        switch(aspectRatio) {
+            case '16:9': return 'w-full aspect-video max-w-2xl';
+            case '1:1': return 'w-full aspect-square max-w-md';
+            case '4:3': return 'w-full aspect-[4/3] max-w-lg';
+            default: return 'w-full aspect-[9/16] max-w-xs'; // 9:16 default
+        }
     };
-
-    // --- SAFE RENDERING HELPER ---
-    const getSafeScenes = (rawScenes: any[]) => {
-        if (!Array.isArray(rawScenes)) return [];
-        return rawScenes.filter(s => !!s && typeof s === 'object');
-    };
-
-    const safeScenes = manifest ? getSafeScenes(manifest.scenes) : [];
 
     if (step === 'INPUT') {
         return (
@@ -693,7 +729,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             {/* Voice Selection Grid */}
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Voice Actor</label>
-                                <div className="grid grid-cols-2 gap-3 h-48 overflow-y-auto pr-1 custom-scrollbar">
+                                <div className="grid grid-cols-2 gap-3 h-32 overflow-y-auto pr-1 custom-scrollbar mb-4">
                                     {VOICES.map(voice => (
                                         <div 
                                             key={voice.id}
@@ -727,6 +763,39 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                         </div>
                                     ))}
                                 </div>
+                            </div>
+
+                            {/* Caption Controls */}
+                            <div className="p-4 bg-black/40 border border-gray-700 rounded-xl">
+                                <div className="flex items-center justify-between mb-3">
+                                    <label className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2">
+                                        <Subtitles size={14} /> Captions
+                                    </label>
+                                    <div 
+                                        className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${captionsEnabled ? 'bg-green-600' : 'bg-gray-600'}`}
+                                        onClick={() => setCaptionsEnabled(!captionsEnabled)}
+                                    >
+                                        <div className={`w-3 h-3 bg-white rounded-full absolute top-1 transition-transform ${captionsEnabled ? 'left-6' : 'left-1'}`} />
+                                    </div>
+                                </div>
+                                
+                                {captionsEnabled && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {CAPTION_STYLES.map(s => (
+                                            <button
+                                                key={s.id}
+                                                onClick={() => setCaptionStyle(s.id)}
+                                                className={`text-[10px] font-bold py-1.5 px-2 rounded border transition-all ${
+                                                    captionStyle === s.id 
+                                                    ? 'bg-indigo-600 border-indigo-500 text-white' 
+                                                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500'
+                                                }`}
+                                            >
+                                                {s.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Background Music Upload */}
@@ -784,6 +853,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
+    // ... Rest of the component (preview view) remains largely the same but uses dynamic class for video container
     return (
         <div className="h-full bg-black text-white flex flex-col md:flex-row overflow-hidden">
              {/* Left Progress Panel */}
@@ -830,20 +900,20 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                  {/* Background Grid */}
                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
-                 <div className="h-full w-full overflow-y-auto pt-4 pb-32 px-8"> 
+                 <div className="h-full w-full overflow-y-auto pt-4 pb-32 px-8 flex flex-col items-center"> 
                      {videoUrl ? (
-                         <div className="relative z-10 w-full max-w-sm md:max-w-md mx-auto animate-in zoom-in duration-500 mt-10">
-                             <div className="relative rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
+                         <div className={`relative z-10 mx-auto animate-in zoom-in duration-500 mt-10 ${getPreviewClass()}`}>
+                             <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
                                  <video 
                                     src={videoUrl} 
                                     controls 
                                     autoPlay 
                                     loop 
-                                    className="w-full h-auto max-h-[70vh] object-contain" 
+                                    className="w-full h-full object-contain bg-black" 
                                  />
                              </div>
                              
-                             <div className="mt-6 flex flex-col gap-3">
+                             <div className="mt-6 flex flex-col gap-3 w-full">
                                  <a 
                                     href={videoUrl} 
                                     download="short_video.webm" 

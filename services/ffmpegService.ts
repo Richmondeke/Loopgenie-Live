@@ -4,6 +4,11 @@ export interface VideoScene {
     text: string;
 }
 
+export interface CaptionSettings {
+    enabled: boolean;
+    style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
+}
+
 // Helper to load image
 const loadImage = (src: string): Promise<HTMLImageElement> => {
     return new Promise((resolve, reject) => {
@@ -29,15 +34,19 @@ const loadVideo = (src: string): Promise<HTMLVideoElement> => {
 };
 
 /**
- * Draws professional captions on the canvas context.
+ * Draws professional captions on the canvas context with configurable styles.
  */
 const drawCaptions = (
     ctx: CanvasRenderingContext2D, 
     text: string, 
     width: number, 
-    height: number
+    height: number,
+    settings?: CaptionSettings
 ) => {
-    if (!text) return;
+    // 1. Check if captions are enabled
+    if (!text || (settings && settings.enabled === false)) return;
+
+    const style = settings?.style || 'BOXED';
 
     // SCALING: Base logic on 1080p (1920x1080 or 1080x1920)
     const referenceDimension = 1080; 
@@ -45,16 +54,20 @@ const drawCaptions = (
     const scaleFactor = currentMinDimension / referenceDimension;
 
     // CONFIGURATION (Professional Style)
-    const fontSize = Math.round(56 * scaleFactor); // Base 56px
+    // Adjust font size slightly based on style
+    const baseFontSize = style === 'HIGHLIGHT' ? 64 : 56;
+    const fontSize = Math.round(baseFontSize * scaleFactor); 
     const lineHeight = fontSize * 1.25;
     const padding = Math.round(24 * scaleFactor);
-    const cornerRadius = Math.round(12 * scaleFactor);
-    const bottomMargin = Math.round(100 * scaleFactor);
+    const cornerRadius = Math.round(16 * scaleFactor);
+    const bottomMargin = Math.round(120 * scaleFactor);
     const shadowBlur = Math.round(4 * scaleFactor);
     const maxWidth = width - (200 * scaleFactor); // 100px safe zone on each side
 
-    // FONT SETTINGS - Updated to Manrope
-    ctx.font = `600 ${fontSize}px Manrope, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+    // FONT SETTINGS
+    // Using a heavy weight for impact
+    const fontWeight = style === 'MINIMAL' ? '500' : '800';
+    ctx.font = `${fontWeight} ${fontSize}px Manrope, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
@@ -76,43 +89,88 @@ const drawCaptions = (
     lines.push(currentLine);
 
     // CALCULATE BOX DIMENSIONS
-    const totalTextHeight = lines.length * lineHeight;
-    const boxWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0) + (padding * 2);
-    const boxHeight = totalTextHeight + (padding * 2);
+    // Measure widest line for box
+    const widestLineWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
+    const boxWidth = widestLineWidth + (padding * 2);
+    const boxHeight = (lines.length * lineHeight) + (padding * 1.5); // Slightly tighter height
     
     const boxX = (width - boxWidth) / 2;
+    // Position from bottom
     const boxY = height - bottomMargin - boxHeight;
 
-    // DRAW SHADOW
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
-    ctx.shadowBlur = shadowBlur;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 2;
+    // --- STYLE RENDERING ---
 
-    // DRAW BACKGROUND BOX (Rounded Rect)
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'; // 60% Opacity Black
-    
-    ctx.beginPath();
-    ctx.moveTo(boxX + cornerRadius, boxY);
-    ctx.lineTo(boxX + boxWidth - cornerRadius, boxY);
-    ctx.quadraticCurveTo(boxX + boxWidth, boxY, boxX + boxWidth, boxY + cornerRadius);
-    ctx.lineTo(boxX + boxWidth, boxY + boxHeight - cornerRadius);
-    ctx.quadraticCurveTo(boxX + boxWidth, boxY + boxHeight, boxX + boxWidth - cornerRadius, boxY + boxHeight);
-    ctx.lineTo(boxX + cornerRadius, boxY + boxHeight);
-    ctx.quadraticCurveTo(boxX, boxY + boxHeight, boxX, boxY + boxHeight - cornerRadius);
-    ctx.lineTo(boxX, boxY + cornerRadius);
-    ctx.quadraticCurveTo(boxX, boxY, boxX + cornerRadius, boxY);
-    ctx.closePath();
-    ctx.fill();
+    if (style === 'BOXED') {
+        // STYLE: BOXED (Standard)
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        ctx.shadowBlur = shadowBlur;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 4;
 
-    // Reset Shadow for Text
-    ctx.fillStyle = '#FFFFFF';
-    
-    // DRAW TEXT
-    let textY = boxY + padding + (lineHeight / 2); // First line center
-    
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'; // Darker box
+        
+        ctx.beginPath();
+        ctx.roundRect(boxX, boxY, boxWidth, boxHeight, cornerRadius);
+        ctx.fill();
+
+        // Reset Shadow for Text to ensure crispness
+        ctx.shadowColor = 'transparent';
+        ctx.fillStyle = '#FFFFFF';
+    } 
+    else if (style === 'OUTLINE') {
+        // STYLE: OUTLINE (Meme / TikTok standard)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.round(6 * scaleFactor);
+        ctx.lineJoin = 'round';
+        ctx.miterLimit = 2;
+        
+        // No box, just text
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 2;
+        ctx.shadowOffsetY = 2;
+    }
+    else if (style === 'HIGHLIGHT') {
+        // STYLE: HIGHLIGHT (Pop style - Yellow text, black shadow)
+        ctx.fillStyle = '#FFEB3B'; // Vibrant Yellow
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = Math.round(4 * scaleFactor);
+        
+        // Hard drop shadow
+        ctx.shadowColor = 'black';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = Math.round(4 * scaleFactor);
+        ctx.shadowOffsetY = Math.round(4 * scaleFactor);
+    }
+    else if (style === 'MINIMAL') {
+        // STYLE: MINIMAL (Clean white text, subtle shadow, no box)
+        ctx.fillStyle = '#FFFFFF';
+        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+        ctx.shadowBlur = Math.round(8 * scaleFactor);
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 2;
+    }
+
+    // DRAW TEXT LINES
+    let textY = boxY + padding + (lineHeight / 2); // Start drawing
+    if (style !== 'BOXED') {
+        // If no box, adjust Y to be roughly same baseline
+        textY = height - bottomMargin - (lines.length * lineHeight) + (lineHeight / 2);
+    }
+
     lines.forEach((line, index) => {
-        ctx.fillText(line, width / 2, textY + (index * lineHeight));
+        const lineY = textY + (index * lineHeight);
+        
+        if (style === 'OUTLINE') {
+            ctx.strokeText(line, width / 2, lineY);
+            ctx.fillText(line, width / 2, lineY);
+        } else if (style === 'HIGHLIGHT') {
+            ctx.strokeText(line, width / 2, lineY);
+            ctx.fillText(line, width / 2, lineY);
+        } else {
+            ctx.fillText(line, width / 2, lineY);
+        }
     });
 };
 
@@ -125,7 +183,8 @@ export const stitchVideoFrames = async (
   durationPerImageMs: number = 5000,
   targetWidth?: number,
   targetHeight?: number,
-  backgroundAudioUrl?: string
+  backgroundAudioUrl?: string,
+  captionSettings?: CaptionSettings
 ): Promise<string> => {
   console.log("Starting client-side video stitching...");
 
@@ -324,7 +383,7 @@ export const stitchVideoFrames = async (
             ctx.restore();
 
             // --- Draw Captions ---
-            drawCaptions(ctx, text, width, height);
+            drawCaptions(ctx, text, width, height, captionSettings);
 
             // Loop Logic
             currentFrameInScene++;
@@ -372,8 +431,10 @@ export const concatenateVideos = async (
 
         try {
             const canvas = document.createElement('canvas');
+            // CRITICAL: Explicitly set canvas size to match the target resolution.
             canvas.width = width;
             canvas.height = height;
+            
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
 
@@ -401,7 +462,11 @@ export const concatenateVideos = async (
             if (dest) tracks.push(...dest.stream.getAudioTracks());
             
             const combinedStream = new MediaStream(tracks);
-            const recorder = new MediaRecorder(combinedStream);
+            const recorder = new MediaRecorder(combinedStream, {
+                // Ensure high enough bitrate for quality, especially for 1080p
+                videoBitsPerSecond: 5000000 // 5 Mbps
+            });
+            
             const chunks: Blob[] = [];
             
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
@@ -419,6 +484,10 @@ export const concatenateVideos = async (
             for (const url of videoUrls) {
                 try {
                     const vid = await loadVideo(url);
+                    
+                    // Note: vid.width/height might be 0 until metadata loaded, but loadVideo promise handles that.
+                    // We must ensure the source video fits into our target canvas dimensions.
+                    
                     await vid.play();
                     
                     // Robust duration handling for infinite/NaN durations
@@ -431,7 +500,11 @@ export const concatenateVideos = async (
                                 return;
                             }
                             
-                            // Draw full size cover
+                            // FORCE DRAW to fill canvas dimensions.
+                            // This acts as a resize if the chunk resolution is slightly off.
+                            // Use 'cover' logic if aspect ratios differ? 
+                            // For simplicity in concatenation, we assume fill (stretch) or strict fit is desired.
+                            // Usually chunks are generated with same AR, so exact fill is safe.
                             ctx.drawImage(vid, 0, 0, width, height);
                             requestAnimationFrame(draw);
                         };

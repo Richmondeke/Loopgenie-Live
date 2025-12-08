@@ -127,7 +127,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
                   ...(result.output_settings || {}),
                   video_resolution: targetResolution,
                   fps: 30,
-                  scene_duration_default: 5
+                  scene_duration_default: 5,
+                  captions: { enabled: true, style: 'BOXED' } // Default
               };
               
               jobStore.update({ manifest: result });
@@ -168,7 +169,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
       output_settings: { 
           video_resolution: targetResolution, 
           fps: 30, 
-          scene_duration_default: 5 
+          scene_duration_default: 5,
+          captions: { enabled: true, style: 'BOXED' }
       },
       scenes: []
   };
@@ -200,7 +202,8 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
                         ...(batchManifest.output_settings || {}),
                         video_resolution: targetResolution, // STRICT FORCE
                         fps: 30,
-                        scene_duration_default: 5
+                        scene_duration_default: 5,
+                        captions: { enabled: true, style: 'BOXED' }
                     }
                 };
             }
@@ -504,6 +507,9 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         }
     }
 
+    // Default to 'BOXED' if undefined
+    const captionSettings = manifest.output_settings.captions || { enabled: true, style: 'BOXED' };
+
     const CHUNK_SIZE = 15;
     
     if (scenes.length <= CHUNK_SIZE) {
@@ -513,7 +519,8 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
             undefined, 
             width, // explicit width
             height, // explicit height
-            backgroundMusicUrl
+            backgroundMusicUrl,
+            captionSettings // Pass captions
         );
     }
 
@@ -524,7 +531,22 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         jobStore.addLog(`Rendering video chunk ${i/CHUNK_SIZE + 1}...`);
         
         try {
-            const chunkUrl = await stitchVideoFrames(chunkScenes, undefined, 5000, width, height); 
+            const chunkUrl = await stitchVideoFrames(
+                chunkScenes, 
+                undefined, // Audio chunking logic needed if splitting audio, usually easier to mix audio at end or split narration. 
+                // Note: Splitting audio perfectly for chunks is complex client side. 
+                // For long video MVP we might need to rely on per-chunk audio or simple slideshow timing if audio is one big blob.
+                // Assuming for now chunks are just visual + silent, mixed later?
+                // Actually, existing logic for long video seems to lack audio chunking. 
+                // For MVP robustness, let's keep audio undefined here and assume 5000ms visual only per chunk if audio too long?
+                // Ideally, `assembleVideo` needs to split audio.
+                // For this fix request (Concatenation), we focus on resolution. 
+                5000, 
+                width, 
+                height,
+                undefined,
+                captionSettings
+            ); 
             videoChunks.push(chunkUrl);
         } catch (e) {
             console.error(`Chunk render failed`, e);
@@ -533,5 +555,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     }
 
     jobStore.addLog("Merging all video chunks...");
+    // Pass audio URL to merge logic if it exists, so it's overlaid on the concatenated video
     return await concatenateVideos(videoChunks, width, height, manifest.generated_audio_url);
 };

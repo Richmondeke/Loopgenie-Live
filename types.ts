@@ -99,6 +99,10 @@ export interface ShortMakerOutputSettings {
   video_resolution: string; // Changed from strict union to string to support more ratios
   fps: number;
   scene_duration_default: number;
+  captions?: {
+      enabled: boolean;
+      style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
+  };
 }
 
 export interface ShortMakerVoiceInstruction {
