@@ -14,13 +14,19 @@ export interface CaptionSettings {
     style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
 }
 
-// Helper to load image
+// Robust Image Loader with Fallback
 const loadImage = (src: string): Promise<HTMLImageElement> => {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => resolve(img);
-        img.onerror = (e) => reject(e);
+        img.onerror = () => {
+            console.warn(`Failed to load image: ${src}. Using placeholder.`);
+            // Fallback placeholder to prevent render crash
+            img.src = 'https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Image+Load+Error';
+            // Remove onerror to prevent loop if placeholder fails (unlikely)
+            img.onerror = null; 
+        };
         img.src = src;
     });
 };
@@ -31,23 +37,31 @@ const loadVideo = (src: string): Promise<HTMLVideoElement> => {
         const vid = document.createElement('video');
         vid.crossOrigin = 'anonymous';
         vid.src = src;
-        vid.muted = true; // Essential for autoplay policies
+        vid.muted = true; 
+        vid.playsInline = true; // Important for mobile
         vid.onloadedmetadata = () => resolve(vid);
-        vid.onerror = (e) => reject(e);
+        vid.onerror = (e) => {
+            console.warn("Video load error", e);
+            reject(e);
+        };
         vid.load();
     });
 };
 
-// Helper to get audio buffer and duration
+// Helper to get audio buffer with safety checks
 const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer> => {
-    const res = await fetch(url);
-    const buf = await res.arrayBuffer();
-    return await ctx.decodeAudioData(buf);
+    try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Audio fetch failed: ${res.statusText}`);
+        const buf = await res.arrayBuffer();
+        return await ctx.decodeAudioData(buf);
+    } catch (e) {
+        console.warn("Audio decode failed", e);
+        // Return empty 1s silent buffer
+        return ctx.createBuffer(1, 24000, 24000); 
+    }
 };
 
-/**
- * Draws professional captions on the canvas context with configurable styles.
- */
 const drawCaptions = (
     ctx: CanvasRenderingContext2D, 
     text: string, 
@@ -55,18 +69,13 @@ const drawCaptions = (
     height: number,
     settings?: CaptionSettings
 ) => {
-    // 1. Check if captions are enabled
     if (!text || (settings && settings.enabled === false)) return;
 
     const style = settings?.style || 'BOXED';
-
-    // SCALING: Base logic on 1080p (1920x1080 or 1080x1920)
     const referenceDimension = 1080; 
     const currentMinDimension = Math.min(width, height);
     const scaleFactor = currentMinDimension / referenceDimension;
 
-    // CONFIGURATION (Professional Style)
-    // Adjust font size slightly based on style
     const baseFontSize = style === 'HIGHLIGHT' ? 64 : 56;
     const fontSize = Math.round(baseFontSize * scaleFactor); 
     const lineHeight = fontSize * 1.25;
@@ -74,16 +83,13 @@ const drawCaptions = (
     const cornerRadius = Math.round(16 * scaleFactor);
     const bottomMargin = Math.round(120 * scaleFactor);
     const shadowBlur = Math.round(4 * scaleFactor);
-    const maxWidth = width - (200 * scaleFactor); // 100px safe zone on each side
+    const maxWidth = width - (200 * scaleFactor); 
 
-    // FONT SETTINGS
-    // Using a heavy weight for impact
     const fontWeight = style === 'MINIMAL' ? '500' : '800';
-    ctx.font = `${fontWeight} ${fontSize}px Manrope, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+    ctx.font = `${fontWeight} ${fontSize}px Manrope, Inter, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // WORD WRAP LOGIC
     const words = text.split(' ');
     const lines: string[] = [];
     let currentLine = words[0];
@@ -100,63 +106,42 @@ const drawCaptions = (
     }
     lines.push(currentLine);
 
-    // CALCULATE BOX DIMENSIONS
-    // Measure widest line for box
     const widestLineWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
     const boxWidth = widestLineWidth + (padding * 2);
-    const boxHeight = (lines.length * lineHeight) + (padding * 1.5); // Slightly tighter height
+    const boxHeight = (lines.length * lineHeight) + (padding * 1.5); 
     
     const boxX = (width - boxWidth) / 2;
-    // Position from bottom
     const boxY = height - bottomMargin - boxHeight;
 
-    // --- STYLE RENDERING ---
-
     if (style === 'BOXED') {
-        // STYLE: BOXED (Standard)
         ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
         ctx.shadowBlur = shadowBlur;
-        ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 4;
-
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'; // Darker box
-        
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'; 
         ctx.beginPath();
         ctx.roundRect(boxX, boxY, boxWidth, boxHeight, cornerRadius);
         ctx.fill();
-
-        // Reset Shadow for Text to ensure crispness
         ctx.shadowColor = 'transparent';
         ctx.fillStyle = '#FFFFFF';
-    } 
-    else if (style === 'OUTLINE') {
-        // STYLE: OUTLINE (Meme / TikTok standard)
+    } else if (style === 'OUTLINE') {
         ctx.fillStyle = '#FFFFFF';
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = Math.round(6 * scaleFactor);
         ctx.lineJoin = 'round';
         ctx.miterLimit = 2;
-        
-        // No box, just text
         ctx.shadowColor = 'rgba(0,0,0,0.3)';
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 2;
         ctx.shadowOffsetY = 2;
-    }
-    else if (style === 'HIGHLIGHT') {
-        // STYLE: HIGHLIGHT (Pop style - Yellow text, black shadow)
-        ctx.fillStyle = '#FFEB3B'; // Vibrant Yellow
+    } else if (style === 'HIGHLIGHT') {
+        ctx.fillStyle = '#FFEB3B'; 
         ctx.strokeStyle = 'black';
         ctx.lineWidth = Math.round(4 * scaleFactor);
-        
-        // Hard drop shadow
         ctx.shadowColor = 'black';
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = Math.round(4 * scaleFactor);
         ctx.shadowOffsetY = Math.round(4 * scaleFactor);
-    }
-    else if (style === 'MINIMAL') {
-        // STYLE: MINIMAL (Clean white text, subtle shadow, no box)
+    } else if (style === 'MINIMAL') {
         ctx.fillStyle = '#FFFFFF';
         ctx.shadowColor = 'rgba(0,0,0,0.8)';
         ctx.shadowBlur = Math.round(8 * scaleFactor);
@@ -164,20 +149,11 @@ const drawCaptions = (
         ctx.shadowOffsetY = 2;
     }
 
-    // DRAW TEXT LINES
-    let textY = boxY + padding + (lineHeight / 2); // Start drawing
-    if (style !== 'BOXED') {
-        // If no box, adjust Y to be roughly same baseline
-        textY = height - bottomMargin - (lines.length * lineHeight) + (lineHeight / 2);
-    }
+    let textY = style === 'BOXED' ? boxY + padding + (lineHeight / 2) : height - bottomMargin - (lines.length * lineHeight) + (lineHeight / 2);
 
     lines.forEach((line, index) => {
         const lineY = textY + (index * lineHeight);
-        
-        if (style === 'OUTLINE') {
-            ctx.strokeText(line, width / 2, lineY);
-            ctx.fillText(line, width / 2, lineY);
-        } else if (style === 'HIGHLIGHT') {
+        if (style === 'OUTLINE' || style === 'HIGHLIGHT') {
             ctx.strokeText(line, width / 2, lineY);
             ctx.fillText(line, width / 2, lineY);
         } else {
@@ -186,10 +162,6 @@ const drawCaptions = (
     });
 };
 
-/**
- * Stitches images and audio into a video CLIENT-SIDE using HTML5 Canvas and MediaRecorder.
- * Now supports per-scene timing based on audio duration.
- */
 export const stitchVideoFrames = async (
   scenes: AdvancedScene[], 
   globalAudioUrl: string | undefined, 
@@ -203,76 +175,68 @@ export const stitchVideoFrames = async (
   console.log("Starting client-side video stitching...");
 
   return new Promise(async (resolve, reject) => {
-    // Safety timeout - Increased for long videos
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
-    }, 1200000); // 20 mins
+    }, 300000); // 5 mins
 
     try {
-        // 1. Prepare Canvas
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
+        const ctx = canvas.getContext('2d', { alpha: false }); // Optimization
         if (!ctx) throw new Error("Could not get canvas context");
 
-        // Determine size from first image if not provided
         let width = targetWidth || 1280;
         let height = targetHeight || 720;
 
         if (!targetWidth || !targetHeight) {
              try {
                 const firstImage = await loadImage(scenes[0].imageUrl);
-                width = targetWidth || firstImage.naturalWidth;
-                height = targetHeight || firstImage.naturalHeight;
+                width = targetWidth || firstImage.naturalWidth || 1280;
+                height = targetHeight || firstImage.naturalHeight || 720;
             } catch (e) {
                 console.warn("Could not load first image for sizing, using default.");
             }
         }
         
+        // Ensure even dimensions for FFMPEG compatibility (some codecs hate odd numbers)
+        width = Math.floor(width / 2) * 2;
+        height = Math.floor(height / 2) * 2;
+
         canvas.width = width;
         canvas.height = height;
         
-        // Fill black background
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, width, height);
 
-        // 2. Prepare Audio Context
+        // Audio Context Setup
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
         const audioContext = new AudioContextClass();
+        
+        // Fix: Resume context if suspended (Browser Autoplay Policy)
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+
         const dest = audioContext.createMediaStreamDestination();
 
-        // 3. Process Scenes & Timing
-        // We need to calculate duration for each scene BEFORE rendering loop.
+        // Prepare Scenes
         const sceneMeta: { durationMs: number, startMs: number, audioBuf?: AudioBuffer }[] = [];
         let accumulatedMs = 0;
 
         // Preload images
         const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
 
-        // Preload and schedule audio
+        // Preload audio
         for (let i = 0; i < scenes.length; i++) {
             const scene = scenes[i];
             let duration = defaultDurationPerImageMs;
             let buffer: AudioBuffer | undefined = undefined;
 
-            // If scene has specific audio, load it and use its duration
             if (scene.audioUrl) {
-                try {
-                    buffer = await loadAudioBuffer(audioContext, scene.audioUrl);
-                    // Extend duration to fit audio, with 1s buffer if needed
-                    const audioDurationMs = buffer.duration * 1000;
-                    // Ensure minimum 1 second or match audio
-                    duration = Math.max(1000, audioDurationMs);
-                } catch(e) {
-                    console.warn(`Failed to load audio for scene ${i}, using default duration.`);
-                }
-            } else if (globalAudioUrl) {
-                // If using one global file, we blindly split time (legacy mode)
-                // Assuming global audio is already loaded elsewhere or passed
-                // For logic consistency, we stick to default duration here if global
+                buffer = await loadAudioBuffer(audioContext, scene.audioUrl);
+                // Min duration 2s or audio length + 0.5s padding
+                duration = Math.max(2000, (buffer.duration * 1000) + 500); 
             }
 
-            // Schedule audio node if buffer exists
             if (buffer) {
                 const source = audioContext.createBufferSource();
                 source.buffer = buffer;
@@ -288,19 +252,7 @@ export const stitchVideoFrames = async (
             accumulatedMs += duration;
         }
 
-        // Handle Global/Background Audio
-        if (globalAudioUrl && !scenes.some(s => s.audioUrl)) {
-             try {
-                const buf = await loadAudioBuffer(audioContext, globalAudioUrl);
-                const source = audioContext.createBufferSource();
-                source.buffer = buf;
-                source.connect(dest);
-                source.start(0);
-                // Adjust total duration if global audio is longer? 
-                // Usually visual drives duration in this mode.
-             } catch(e) { console.warn("Global audio fail"); }
-        }
-
+        // BG Audio
         if (backgroundAudioUrl) {
             try {
                 const buf = await loadAudioBuffer(audioContext, backgroundAudioUrl);
@@ -308,15 +260,15 @@ export const stitchVideoFrames = async (
                 bgSource.buffer = buf;
                 bgSource.loop = true;
                 const bgGain = audioContext.createGain();
-                bgGain.gain.value = 0.12; 
+                bgGain.gain.value = 0.15; // Lower volume for BG music
                 bgSource.connect(bgGain);
                 bgGain.connect(dest);
                 bgSource.start(0);
-            } catch(e) { console.warn("BG audio fail"); }
+            } catch(e) { console.warn("BG audio fail", e); }
         }
 
-        // 4. Prepare Recorder
-        const canvasStream = canvas.captureStream(30); // 30 FPS
+        // Recorder Setup
+        const canvasStream = canvas.captureStream(30); 
         const combinedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
         const combinedStream = new MediaStream(combinedTracks);
         
@@ -328,9 +280,10 @@ export const stitchVideoFrames = async (
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
 
+        // Lower bitrate slightly for better compatibility/stability
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
-            videoBitsPerSecond: 5000000 // 5 Mbps
+            videoBitsPerSecond: 3500000 // 3.5 Mbps
         });
 
         const chunks: Blob[] = [];
@@ -346,18 +299,14 @@ export const stitchVideoFrames = async (
             resolve(url);
         };
 
-        // 5. Start Recording loop
         recorder.start();
         
-        // Loop Vars
         const fps = 30;
         let currentSceneIdx = 0;
-        let sceneStartTime = performance.now(); // For delta timing within rendering logic (simulated)
         let totalElapsedMs = 0;
         let startRenderTime = performance.now();
 
         const drawFrame = () => {
-            // Check limits
             if (currentSceneIdx >= scenes.length || recorder.state === 'inactive') {
                 recorder.stop();
                 return;
@@ -367,79 +316,62 @@ export const stitchVideoFrames = async (
             const meta = sceneMeta[currentSceneIdx];
             const img = loadedImages[currentSceneIdx];
             
-            // Calculate progress in current scene
             const sceneProgress = (totalElapsedMs - meta.startMs) / meta.durationMs;
             
-            // --- ANIMATION LOGIC ---
-            // Common scaling setup
+            // Animation
             let scale = 1.0;
             let translateX = 0;
             let translateY = 0;
 
             if (animationStyle === 'ZOOM') {
-                // Ken Burns Zoom In
-                scale = 1.0 + (sceneProgress * 0.15); // Zoom from 1.0 to 1.15
+                scale = 1.0 + (sceneProgress * 0.1); 
             } else if (animationStyle === 'PAN') {
-                // Gentle Pan
-                scale = 1.15; // Start slightly zoomed in
+                scale = 1.15; 
                 const panRange = width * 0.05;
-                // Pan direction alternates
                 const direction = currentSceneIdx % 2 === 0 ? 1 : -1;
                 translateX = (sceneProgress * panRange * direction) - (panRange / 2 * direction);
-            } else {
-                // STATIC
-                scale = 1.0;
             }
 
-            // Draw Background
+            // Draw
             ctx.fillStyle = 'black';
             ctx.fillRect(0, 0, width, height);
 
-            // Draw Image with Transform
             ctx.save();
             ctx.translate(width / 2, height / 2);
             ctx.scale(scale, scale);
             ctx.translate(-width / 2, -height / 2);
             ctx.translate(translateX, translateY);
 
-            const imgRatio = img.naturalWidth / img.naturalHeight;
-            const canvasRatio = width / height;
-            let renderW, renderH, offsetX, offsetY;
+            if (img.complete && img.naturalWidth > 0) {
+                const imgRatio = img.naturalWidth / img.naturalHeight;
+                const canvasRatio = width / height;
+                let renderW, renderH, offsetX, offsetY;
 
-            // Cover logic
-            if (imgRatio > canvasRatio) {
-                renderH = height;
-                renderW = height * imgRatio;
-                offsetX = -(renderW - width) / 2;
-                offsetY = 0;
-            } else {
-                renderW = width;
-                renderH = width / imgRatio;
-                offsetX = 0;
-                offsetY = -(renderH - height) / 2;
+                if (imgRatio > canvasRatio) {
+                    renderH = height;
+                    renderW = height * imgRatio;
+                    offsetX = -(renderW - width) / 2;
+                    offsetY = 0;
+                } else {
+                    renderW = width;
+                    renderH = width / imgRatio;
+                    offsetX = 0;
+                    offsetY = -(renderH - height) / 2;
+                }
+                ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
             }
-            ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
             ctx.restore();
 
-            // --- Draw Captions ---
             drawCaptions(ctx, scene.text, width, height, captionSettings);
 
-            // Time Management
-            // We increment fixed time step for smooth video file even if render is slow
             const msPerFrame = 1000 / fps;
             totalElapsedMs += msPerFrame;
 
-            // Check if scene complete
             if (totalElapsedMs >= meta.startMs + meta.durationMs) {
                 currentSceneIdx++;
             }
 
-            // Request next frame
-            // To prevent browser throttling, we can use a tight loop with setImmediate/setTimeout(0) in a Worker,
-            // but for main thread, we try to align with AF. 
-            // However, MediaRecorder captures real-time. If we draw faster than real-time, it might look fast.
-            // We need to sync our "virtual" totalElapsedMs with "wall clock" time to ensure MediaRecorder records proper speed.
-            
+            // Sync with real time to not speed up video excessively in recorder
             const wallClockElapsed = performance.now() - startRenderTime;
             const drift = totalElapsedMs - wallClockElapsed;
             
@@ -459,10 +391,6 @@ export const stitchVideoFrames = async (
   });
 };
 
-/**
- * Client-side concatenation of multiple video URLs.
- * Simulates stitching by playing them sequentially on a canvas recorder.
- */
 export const concatenateVideos = async (
     videoUrls: string[], 
     width: number = 1280, 
@@ -470,21 +398,18 @@ export const concatenateVideos = async (
     backgroundAudioUrl?: string
 ): Promise<string> => {
     return new Promise(async (resolve, reject) => {
-        // Concatenating 20 mins can take time, set a safe timeout
         const timeoutId = setTimeout(() => {
             reject(new Error("Concatenation timed out."));
         }, 1200000); 
 
         try {
             const canvas = document.createElement('canvas');
-            // CRITICAL: Explicitly set canvas size to match the target resolution.
             canvas.width = width;
             canvas.height = height;
             
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
 
-            // Optional Background Audio (Global Narration or Music)
             let audioContext: AudioContext | null = null;
             let dest: MediaStreamAudioDestinationNode | null = null;
             let bgSource: AudioBufferSourceNode | null = null;
@@ -492,6 +417,8 @@ export const concatenateVideos = async (
             if (backgroundAudioUrl) {
                 const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
                 audioContext = new AudioContextClass();
+                if (audioContext.state === 'suspended') await audioContext.resume();
+
                 const response = await fetch(backgroundAudioUrl);
                 const ab = await response.arrayBuffer();
                 const buffer = await audioContext.decodeAudioData(ab);
@@ -500,7 +427,6 @@ export const concatenateVideos = async (
                 bgSource = audioContext.createBufferSource();
                 bgSource.buffer = buffer;
                 bgSource.connect(dest);
-                // Don't connect to speaker to avoid echo during render
             }
 
             const stream = canvas.captureStream(30);
@@ -509,12 +435,10 @@ export const concatenateVideos = async (
             
             const combinedStream = new MediaStream(tracks);
             const recorder = new MediaRecorder(combinedStream, {
-                // Ensure high enough bitrate for quality, especially for 1080p
-                videoBitsPerSecond: 5000000 // 5 Mbps
+                videoBitsPerSecond: 3500000 // 3.5 Mbps
             });
             
             const chunks: Blob[] = [];
-            
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
                  clearTimeout(timeoutId);
@@ -526,17 +450,11 @@ export const concatenateVideos = async (
             recorder.start();
             if (bgSource) bgSource.start(0);
 
-            // Sequential Playback
             for (const url of videoUrls) {
                 try {
                     const vid = await loadVideo(url);
-                    
-                    // Note: vid.width/height might be 0 until metadata loaded, but loadVideo promise handles that.
-                    // We must ensure the source video fits into our target canvas dimensions.
-                    
                     await vid.play();
                     
-                    // Robust duration handling for infinite/NaN durations
                     const safeDuration = (Number.isFinite(vid.duration) && vid.duration > 0) ? vid.duration : 10;
                     
                     await new Promise<void>((res) => {
@@ -545,24 +463,16 @@ export const concatenateVideos = async (
                                 res();
                                 return;
                             }
-                            
-                            // FORCE DRAW to fill canvas dimensions.
-                            // This acts as a resize if the chunk resolution is slightly off.
-                            // Use 'cover' logic if aspect ratios differ? 
-                            // For simplicity in concatenation, we assume fill (stretch) or strict fit is desired.
-                            // Usually chunks are generated with same AR, so exact fill is safe.
                             ctx.drawImage(vid, 0, 0, width, height);
                             requestAnimationFrame(draw);
                         };
                         
-                        // Safety timeout per clip
                         const safety = setTimeout(() => {
                             if(!vid.paused) vid.pause();
                             res(); 
-                        }, (safeDuration * 1000) + 2000); 
+                        }, (safeDuration * 1000) + 1000); 
 
                         draw();
-                        
                         vid.onended = () => {
                             clearTimeout(safety);
                             res();
@@ -596,6 +506,8 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
             
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const actx = new AudioContextClass();
+            if (actx.state === 'suspended') await actx.resume();
+
             const dest = actx.createMediaStreamDestination();
             const source = actx.createMediaElementSource(video);
             source.connect(dest);
@@ -631,6 +543,7 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
         } catch(e) { reject(e); }
     });
 };
+
 export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promise<string> => {
     return new Promise(async (resolve, reject) => {
         try {
@@ -641,9 +554,10 @@ export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promi
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("No ctx");
 
-            // Audio Setup
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const audioContext = new AudioContextClass();
+            if (audioContext.state === 'suspended') await audioContext.resume();
+
             const response = await fetch(audioUrl);
             const arrayBuffer = await response.arrayBuffer();
             const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
