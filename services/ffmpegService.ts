@@ -26,6 +26,7 @@ const loadImage = (src: string): Promise<HTMLImageElement> => {
             img.src = 'https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Image+Load+Error';
             // Remove onerror to prevent loop if placeholder fails (unlikely)
             img.onerror = null; 
+            resolve(img);
         };
         img.src = src;
     });
@@ -49,7 +50,7 @@ const loadVideo = (src: string): Promise<HTMLVideoElement> => {
 };
 
 // Helper to get audio buffer with safety checks
-const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer> => {
+const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuffer | null> => {
     try {
         const res = await fetch(url);
         if (!res.ok) throw new Error(`Audio fetch failed: ${res.statusText}`);
@@ -57,8 +58,7 @@ const loadAudioBuffer = async (ctx: AudioContext, url: string): Promise<AudioBuf
         return await ctx.decodeAudioData(buf);
     } catch (e) {
         console.warn("Audio decode failed", e);
-        // Return empty 1s silent buffer
-        return ctx.createBuffer(1, 24000, 24000); 
+        return null;
     }
 };
 
@@ -172,32 +172,34 @@ export const stitchVideoFrames = async (
   captionSettings?: CaptionSettings,
   animationStyle: 'ZOOM' | 'PAN' | 'STATIC' = 'ZOOM'
 ): Promise<string> => {
-  console.log("Starting client-side video stitching...");
+  console.log("Starting client-side video stitching (v3 - precise sync)...");
 
   return new Promise(async (resolve, reject) => {
+    // 5 Minute Safety Timeout
     const timeoutId = setTimeout(() => {
         reject(new Error("Video generation timed out."));
-    }, 300000); // 5 mins
+    }, 300000);
+
+    let audioContext: AudioContext | null = null;
 
     try {
         const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d', { alpha: false }); // Optimization
+        const ctx = canvas.getContext('2d', { alpha: false }); 
         if (!ctx) throw new Error("Could not get canvas context");
 
-        let width = targetWidth || 1280;
-        let height = targetHeight || 720;
+        // 1. Determine Dimensions
+        let width = targetWidth || 1080;
+        let height = targetHeight || 1920;
 
         if (!targetWidth || !targetHeight) {
              try {
                 const firstImage = await loadImage(scenes[0].imageUrl);
-                width = targetWidth || firstImage.naturalWidth || 1280;
-                height = targetHeight || firstImage.naturalHeight || 720;
-            } catch (e) {
-                console.warn("Could not load first image for sizing, using default.");
-            }
+                width = targetWidth || firstImage.naturalWidth || 1080;
+                height = targetHeight || firstImage.naturalHeight || 1920;
+            } catch (e) { console.warn("Sizing fallback"); }
         }
         
-        // Ensure even dimensions for FFMPEG compatibility (some codecs hate odd numbers)
+        // Ensure even dimensions for Codec compatibility
         width = Math.floor(width / 2) * 2;
         height = Math.floor(height / 2) * 2;
 
@@ -207,71 +209,92 @@ export const stitchVideoFrames = async (
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, width, height);
 
-        // Audio Context Setup
+        // 2. Setup Audio
         const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-        const audioContext = new AudioContextClass();
-        
-        // Fix: Resume context if suspended (Browser Autoplay Policy)
-        if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-        }
+        audioContext = new AudioContextClass();
+        if (audioContext.state === 'suspended') await audioContext.resume();
 
         const dest = audioContext.createMediaStreamDestination();
 
-        // Prepare Scenes
-        const sceneMeta: { durationMs: number, startMs: number, audioBuf?: AudioBuffer }[] = [];
-        let accumulatedMs = 0;
+        // 3. Preload & Calculate Timeline
+        // We need a precise map of: Scene Index -> Start Time (ms) -> End Time (ms)
+        interface SceneTimeline {
+            index: number;
+            startMs: number;
+            endMs: number;
+            durationMs: number;
+            img: HTMLImageElement;
+            text: string;
+        }
 
-        // Preload images
+        const timeline: SceneTimeline[] = [];
+        let accumulatedMs = 0;
+        
+        // Parallel load of images to speed up start
         const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
 
-        // Preload audio
         for (let i = 0; i < scenes.length; i++) {
             const scene = scenes[i];
             let duration = defaultDurationPerImageMs;
-            let buffer: AudioBuffer | undefined = undefined;
+            let audioBuffer: AudioBuffer | null = null;
 
+            // Load Audio for Scene
             if (scene.audioUrl) {
-                buffer = await loadAudioBuffer(audioContext, scene.audioUrl);
-                // Min duration 2s or audio length + 0.5s padding
-                duration = Math.max(2000, (buffer.duration * 1000) + 500); 
+                audioBuffer = await loadAudioBuffer(audioContext, scene.audioUrl);
+                if (audioBuffer) {
+                    // Min duration 2s or audio length + 0.3s padding
+                    duration = Math.max(2000, (audioBuffer.duration * 1000) + 300);
+                }
             }
 
-            if (buffer) {
+            // Schedule Audio Playback
+            // We use the AudioContext's currentTime schedule.
+            // Note: We add a small 100ms offset to the start to ensure the recorder is rolling.
+            const START_OFFSET_S = 0.1; 
+            const scheduleTime = audioContext.currentTime + START_OFFSET_S + (accumulatedMs / 1000);
+
+            if (audioBuffer) {
                 const source = audioContext.createBufferSource();
-                source.buffer = buffer;
+                source.buffer = audioBuffer;
                 source.connect(dest);
-                source.start(accumulatedMs / 1000);
+                source.start(scheduleTime);
             }
 
-            sceneMeta.push({
-                durationMs: duration,
+            timeline.push({
+                index: i,
                 startMs: accumulatedMs,
-                audioBuf: buffer
+                endMs: accumulatedMs + duration,
+                durationMs: duration,
+                img: loadedImages[i],
+                text: scene.text
             });
+
             accumulatedMs += duration;
         }
 
-        // BG Audio
+        const totalDurationMs = accumulatedMs;
+
+        // Background Music
         if (backgroundAudioUrl) {
-            try {
-                const buf = await loadAudioBuffer(audioContext, backgroundAudioUrl);
+            const buf = await loadAudioBuffer(audioContext, backgroundAudioUrl);
+            if (buf) {
                 const bgSource = audioContext.createBufferSource();
                 bgSource.buffer = buf;
                 bgSource.loop = true;
                 const bgGain = audioContext.createGain();
-                bgGain.gain.value = 0.15; // Lower volume for BG music
+                bgGain.gain.value = 0.15;
                 bgSource.connect(bgGain);
                 bgGain.connect(dest);
-                bgSource.start(0);
-            } catch(e) { console.warn("BG audio fail", e); }
+                bgSource.start(audioContext.currentTime + 0.1);
+            }
         }
 
-        // Recorder Setup
+        // 4. Start Recording
         const canvasStream = canvas.captureStream(30); 
         const combinedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
         const combinedStream = new MediaStream(combinedTracks);
         
+        // Codec selection for best compatibility
         const mimeTypes = [
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
@@ -280,7 +303,6 @@ export const stitchVideoFrames = async (
         ];
         const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
 
-        // Lower bitrate slightly for better compatibility/stability
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
             videoBitsPerSecond: 3500000 // 3.5 Mbps
@@ -299,93 +321,89 @@ export const stitchVideoFrames = async (
             resolve(url);
         };
 
+        // Start recorder slightly before we start counting frames to capture audio attack
         recorder.start();
         
-        const fps = 30;
-        let currentSceneIdx = 0;
-        let totalElapsedMs = 0;
-        let startRenderTime = performance.now();
+        // 5. Render Loop
+        const startTime = performance.now();
+        
+        const renderLoop = () => {
+            const now = performance.now();
+            const elapsed = now - startTime;
 
-        const drawFrame = () => {
-            if (currentSceneIdx >= scenes.length || recorder.state === 'inactive') {
+            // Stop condition
+            if (elapsed >= totalDurationMs) {
                 recorder.stop();
                 return;
             }
 
-            const scene = scenes[currentSceneIdx];
-            const meta = sceneMeta[currentSceneIdx];
-            const img = loadedImages[currentSceneIdx];
-            
-            const sceneProgress = (totalElapsedMs - meta.startMs) / meta.durationMs;
-            
-            // Animation
-            let scale = 1.0;
-            let translateX = 0;
-            let translateY = 0;
+            // Find current scene based on time (Fixes "One Scene Showing" bug)
+            // We search the timeline for the scene that encompasses the current elapsed time
+            const activeScene = timeline.find(t => elapsed >= t.startMs && elapsed < t.endMs);
 
-            if (animationStyle === 'ZOOM') {
-                scale = 1.0 + (sceneProgress * 0.1); 
-            } else if (animationStyle === 'PAN') {
-                scale = 1.15; 
-                const panRange = width * 0.05;
-                const direction = currentSceneIdx % 2 === 0 ? 1 : -1;
-                translateX = (sceneProgress * panRange * direction) - (panRange / 2 * direction);
-            }
+            if (activeScene) {
+                const sceneProgress = (elapsed - activeScene.startMs) / activeScene.durationMs;
+                const { img, text, index } = activeScene;
 
-            // Draw
-            ctx.fillStyle = 'black';
-            ctx.fillRect(0, 0, width, height);
+                // --- Animation Logic ---
+                let scale = 1.0;
+                let translateX = 0;
+                let translateY = 0;
 
-            ctx.save();
-            ctx.translate(width / 2, height / 2);
-            ctx.scale(scale, scale);
-            ctx.translate(-width / 2, -height / 2);
-            ctx.translate(translateX, translateY);
-
-            if (img.complete && img.naturalWidth > 0) {
-                const imgRatio = img.naturalWidth / img.naturalHeight;
-                const canvasRatio = width / height;
-                let renderW, renderH, offsetX, offsetY;
-
-                if (imgRatio > canvasRatio) {
-                    renderH = height;
-                    renderW = height * imgRatio;
-                    offsetX = -(renderW - width) / 2;
-                    offsetY = 0;
-                } else {
-                    renderW = width;
-                    renderH = width / imgRatio;
-                    offsetX = 0;
-                    offsetY = -(renderH - height) / 2;
+                if (animationStyle === 'ZOOM') {
+                    // Smooth Zoom In
+                    scale = 1.0 + (sceneProgress * 0.15); 
+                } else if (animationStyle === 'PAN') {
+                    // Alternating Pan
+                    scale = 1.15; 
+                    const panRange = width * 0.05;
+                    const direction = index % 2 === 0 ? 1 : -1;
+                    translateX = (sceneProgress * panRange * direction) - (panRange / 2 * direction);
                 }
-                ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
+
+                // Clear & Fill Background (Safety against transparent/missing imgs)
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, width, height);
+
+                if (img && img.complete && img.naturalWidth > 0) {
+                    ctx.save();
+                    ctx.translate(width / 2, height / 2);
+                    ctx.scale(scale, scale);
+                    ctx.translate(-width / 2, -height / 2);
+                    ctx.translate(translateX, translateY);
+
+                    // Aspect Ratio Cover Logic
+                    const imgRatio = img.naturalWidth / img.naturalHeight;
+                    const canvasRatio = width / height;
+                    let renderW, renderH, offsetX, offsetY;
+
+                    if (imgRatio > canvasRatio) {
+                        renderH = height;
+                        renderW = height * imgRatio;
+                        offsetX = -(renderW - width) / 2;
+                        offsetY = 0;
+                    } else {
+                        renderW = width;
+                        renderH = width / imgRatio;
+                        offsetX = 0;
+                        offsetY = -(renderH - height) / 2;
+                    }
+                    ctx.drawImage(img, offsetX, offsetY, renderW, renderH);
+                    ctx.restore();
+                }
+
+                // Captions
+                drawCaptions(ctx, text, width, height, captionSettings);
             }
-            ctx.restore();
 
-            drawCaptions(ctx, scene.text, width, height, captionSettings);
-
-            const msPerFrame = 1000 / fps;
-            totalElapsedMs += msPerFrame;
-
-            if (totalElapsedMs >= meta.startMs + meta.durationMs) {
-                currentSceneIdx++;
-            }
-
-            // Sync with real time to not speed up video excessively in recorder
-            const wallClockElapsed = performance.now() - startRenderTime;
-            const drift = totalElapsedMs - wallClockElapsed;
-            
-            if (drift > 0) {
-                setTimeout(() => requestAnimationFrame(drawFrame), drift);
-            } else {
-                requestAnimationFrame(drawFrame);
-            }
+            requestAnimationFrame(renderLoop);
         };
 
-        requestAnimationFrame(drawFrame);
+        renderLoop();
 
     } catch (err) {
         clearTimeout(timeoutId);
+        if (audioContext && audioContext.state !== 'closed') audioContext.close();
         reject(err);
     }
   });
