@@ -172,7 +172,7 @@ export const stitchVideoFrames = async (
   captionSettings?: CaptionSettings,
   animationStyle: 'ZOOM' | 'PAN' | 'STATIC' = 'ZOOM'
 ): Promise<string> => {
-  console.log("Starting client-side video stitching (v3 - precise sync)...");
+  console.log("Starting client-side video stitching (v4 - global audio support)...");
 
   return new Promise(async (resolve, reject) => {
     // 5 Minute Safety Timeout
@@ -216,8 +216,13 @@ export const stitchVideoFrames = async (
 
         const dest = audioContext.createMediaStreamDestination();
 
-        // 3. Preload & Calculate Timeline
-        // We need a precise map of: Scene Index -> Start Time (ms) -> End Time (ms)
+        // 3. Load Global Audio (Voiceover)
+        let globalBuffer: AudioBuffer | null = null;
+        if (globalAudioUrl) {
+            globalBuffer = await loadAudioBuffer(audioContext, globalAudioUrl);
+        }
+
+        // 4. Preload & Calculate Timeline
         interface SceneTimeline {
             index: number;
             startMs: number;
@@ -232,24 +237,31 @@ export const stitchVideoFrames = async (
         
         // Parallel load of images to speed up start
         const loadedImages = await Promise.all(scenes.map(s => loadImage(s.imageUrl)));
+        
+        // Calculate total text length for distribution if using global audio
+        const totalTextLength = scenes.reduce((acc, s) => acc + (s.text || "").length, 0);
 
         for (let i = 0; i < scenes.length; i++) {
             const scene = scenes[i];
             let duration = defaultDurationPerImageMs;
             let audioBuffer: AudioBuffer | null = null;
 
-            // Load Audio for Scene
+            // Scenario A: Scene has explicit audio (takes precedence)
             if (scene.audioUrl) {
                 audioBuffer = await loadAudioBuffer(audioContext, scene.audioUrl);
                 if (audioBuffer) {
-                    // Min duration 2s or audio length + 0.3s padding
                     duration = Math.max(2000, (audioBuffer.duration * 1000) + 300);
                 }
+            } 
+            // Scenario B: Global audio exists, distribute duration by text length
+            else if (globalBuffer && totalTextLength > 0) {
+                const ratio = (scene.text || "").length / totalTextLength;
+                const globalDurationMs = globalBuffer.duration * 1000;
+                // Minimum 1.5s per scene to ensure visibility
+                duration = Math.max(1500, globalDurationMs * ratio);
             }
 
-            // Schedule Audio Playback
-            // We use the AudioContext's currentTime schedule.
-            // Note: We add a small 100ms offset to the start to ensure the recorder is rolling.
+            // Schedule Individual Audio Playback (if Scene Audio)
             const START_OFFSET_S = 0.1; 
             const scheduleTime = audioContext.currentTime + START_OFFSET_S + (accumulatedMs / 1000);
 
@@ -274,6 +286,15 @@ export const stitchVideoFrames = async (
 
         const totalDurationMs = accumulatedMs;
 
+        // Schedule Global Audio Playback (if Global Audio)
+        if (globalBuffer) {
+             const source = audioContext.createBufferSource();
+             source.buffer = globalBuffer;
+             source.connect(dest);
+             // Start at the beginning
+             source.start(audioContext.currentTime + 0.1); 
+        }
+
         // Background Music
         if (backgroundAudioUrl) {
             const buf = await loadAudioBuffer(audioContext, backgroundAudioUrl);
@@ -289,12 +310,11 @@ export const stitchVideoFrames = async (
             }
         }
 
-        // 4. Start Recording
+        // 5. Start Recording
         const canvasStream = canvas.captureStream(30); 
         const combinedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
         const combinedStream = new MediaStream(combinedTracks);
         
-        // Codec selection for best compatibility
         const mimeTypes = [
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
@@ -321,10 +341,10 @@ export const stitchVideoFrames = async (
             resolve(url);
         };
 
-        // Start recorder slightly before we start counting frames to capture audio attack
+        // Start recorder
         recorder.start();
         
-        // 5. Render Loop
+        // 6. Render Loop
         const startTime = performance.now();
         
         const renderLoop = () => {
@@ -337,8 +357,7 @@ export const stitchVideoFrames = async (
                 return;
             }
 
-            // Find current scene based on time (Fixes "One Scene Showing" bug)
-            // We search the timeline for the scene that encompasses the current elapsed time
+            // Find current scene based on time
             const activeScene = timeline.find(t => elapsed >= t.startMs && elapsed < t.endMs);
 
             if (activeScene) {
@@ -361,7 +380,7 @@ export const stitchVideoFrames = async (
                     translateX = (sceneProgress * panRange * direction) - (panRange / 2 * direction);
                 }
 
-                // Clear & Fill Background (Safety against transparent/missing imgs)
+                // Clear & Fill Background
                 ctx.fillStyle = 'black';
                 ctx.fillRect(0, 0, width, height);
 

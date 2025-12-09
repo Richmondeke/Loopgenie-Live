@@ -1,3 +1,4 @@
+
 import { invokeGemini } from "./geminiService";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames, concatenateVideos, AdvancedScene } from "./ffmpegService";
@@ -343,7 +344,6 @@ AspectRatio: "${ratioText}"
             config: {
                 systemInstruction: systemInstruction,
                 temperature: 0.4,
-                // Removed maxOutputTokens and responseMimeType to be safe and use defaults
             }
         }), 
         90000, 
@@ -414,7 +414,6 @@ export const generateSceneImage = async (
     }
 
     // AI GENERATION PATH
-    // Truncate to prevent token limit crashes (though Gemini allows large context, safety first)
     if (basePrompt.length > 1500) basePrompt = basePrompt.substring(0, 1500);
 
     let fullPrompt = `(${style} style), ${basePrompt}, ${characterAnchor}, ${envAnchor}`;
@@ -428,7 +427,6 @@ export const generateSceneImage = async (
     }
 
     if (model === 'flux') {
-        // Updated resolution logic for Flux to match common aspect ratios
         let width = 720; let height = 1280;
         if (aspectRatio === '16:9') { width = 1280; height = 720; }
         if (aspectRatio === '1:1') { width = 1024; height = 1024; }
@@ -469,49 +467,44 @@ export const synthesizeAudio = async (
     elevenApiKey?: string,
     preferredVoice: string = "Fenrir"
 ): Promise<ShortMakerManifest> => {
-    // Generate individual audio clips per scene to ensure sync
-    const updatedScenes = [...manifest.scenes];
-    const audioSegments: string[] = [];
-    
-    // Sync status with store
+    // Generate ONE single long voiceover file to ensure smoothness
     jobStore.update({ status: 'NARRATING' });
+    jobStore.addLog(`Synthesizing full voiceover (${preferredVoice})...`);
 
-    const MAX_CONCURRENT = 3; // Reduced concurrency for stability
-    for (let i = 0; i < updatedScenes.length; i += MAX_CONCURRENT) {
-        jobStore.addLog(`Synthesizing audio for scenes ${i+1} to ${Math.min(i+MAX_CONCURRENT, updatedScenes.length)}...`);
-        const batchIndices = updatedScenes.slice(i, i + MAX_CONCURRENT).map((_, idx) => i + idx);
+    const fullScript = manifest.scenes
+        .map(s => s.narration_text)
+        .filter(t => !!t)
+        .join(" "); // Join with space for natural flow
+    
+    if (!fullScript.trim()) {
+        jobStore.addLog("No narration text found.");
+        return manifest;
+    }
+
+    try {
+        // Generate single audio file
+        const audioUrl = await generateSpeech(fullScript, preferredVoice);
         
-        await Promise.all(batchIndices.map(async (sceneIdx) => {
-            const scene = updatedScenes[sceneIdx];
-            if (!scene.narration_text) return;
-            
-            try {
-                const audioUrl = await generateSpeech(scene.narration_text, preferredVoice);
-                updatedScenes[sceneIdx].generated_audio_url = audioUrl;
-                audioSegments.push(audioUrl);
-            } catch (e) {
-                console.warn(`TTS failed for scene ${scene.scene_number}`, e);
-            }
+        // Remove individual audio URLs from scenes to force global audio usage in assembly
+        const updatedScenes = manifest.scenes.map(s => ({
+            ...s,
+            generated_audio_url: undefined // Clear individual clips if they existed
         }));
-        
-        // Small break to respect rate limits
-        await new Promise(r => setTimeout(r, 500));
-    }
-    
-    // Also combine for global reference if needed, though stitcher will use per-scene
-    let combinedUrl = '';
-    if (audioSegments.length > 0) {
-        combinedUrl = combineAudioSegments(audioSegments);
-    }
-    
-    const updatedManifest = {
-        ...manifest,
-        scenes: updatedScenes,
-        generated_audio_url: combinedUrl
-    };
 
-    jobStore.update({ manifest: updatedManifest });
-    return updatedManifest;
+        const updatedManifest = {
+            ...manifest,
+            scenes: updatedScenes,
+            generated_audio_url: audioUrl
+        };
+
+        jobStore.update({ manifest: updatedManifest });
+        return updatedManifest;
+
+    } catch (e: any) {
+        console.error("Global TTS Failed", e);
+        jobStore.addLog(`❌ TTS Failed: ${e.message}`);
+        throw e;
+    }
 };
 
 export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusicUrl?: string): Promise<string> => {
@@ -521,7 +514,7 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         .map(s => ({
             imageUrl: s.generated_image_url as string,
             text: s.narration_text || "",
-            audioUrl: s.generated_audio_url // Pass individual audio URL
+            audioUrl: s.generated_audio_url // Likely undefined if using global audio
         }));
 
     if (scenes.length === 0) throw new Error("No valid images generated to assemble video");
@@ -529,7 +522,6 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
     jobStore.update({ status: 'ASSEMBLING' });
     jobStore.addLog("Assembling final video...");
 
-    // Determine output dimensions from manifest resolution settings
     let width = 1080;
     let height = 1920;
     if (manifest.output_settings && manifest.output_settings.video_resolution) {
@@ -540,50 +532,21 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         }
     }
 
-    // Default to 'BOXED' if undefined
     const captionSettings = manifest.output_settings.captions || { enabled: true, style: 'BOXED' };
     const animationStyle = manifest.output_settings.animation || 'ZOOM';
 
-    const CHUNK_SIZE = 10; // Smaller chunk size for safety with heavy audio processing
-    
-    if (scenes.length <= CHUNK_SIZE) {
-        return await stitchVideoFrames(
-            scenes, 
-            undefined, // No global audio, using per-scene
-            undefined, 
-            width, 
-            height, 
-            backgroundMusicUrl,
-            captionSettings,
-            animationStyle
-        );
-    }
+    // If we have a global audio generated, pass it to stitchVideoFrames
+    const globalVoiceover = manifest.generated_audio_url;
 
-    const videoChunks: string[] = [];
-    
-    for (let i = 0; i < scenes.length; i += CHUNK_SIZE) {
-        const chunkScenes = scenes.slice(i, i + CHUNK_SIZE);
-        jobStore.addLog(`Rendering video chunk ${i/CHUNK_SIZE + 1}...`);
-        
-        try {
-            const chunkUrl = await stitchVideoFrames(
-                chunkScenes, 
-                undefined, 
-                5000, 
-                width, 
-                height,
-                undefined, // Only apply BG music at final concatenation if needed, or pass it here? Better at final merge usually, but we are concatenating video streams.
-                           // Actually, ffmpegService concatenateVideos supports bgAudio.
-                captionSettings,
-                animationStyle
-            ); 
-            videoChunks.push(chunkUrl);
-        } catch (e) {
-            console.error(`Chunk render failed`, e);
-            throw new Error(`Render failed at minute ${(i/CHUNK_SIZE)+1}. Please try again.`);
-        }
-    }
-
-    jobStore.addLog("Merging all video chunks...");
-    return await concatenateVideos(videoChunks, width, height, backgroundMusicUrl);
+    // We try to render in one go for smoothness with global audio
+    return await stitchVideoFrames(
+        scenes, 
+        globalVoiceover, 
+        5000, 
+        width, 
+        height, 
+        backgroundMusicUrl,
+        captionSettings,
+        animationStyle
+    );
 };
