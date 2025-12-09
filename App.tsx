@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TemplateGallery } from './components/TemplateGallery';
@@ -229,7 +230,7 @@ const App: React.FC = () => {
       setIsOnboarding(false);
   };
 
-  const handleOnboardingComplete = (keys: { heyGen?: string }) => {
+  const handleOnboardingComplete = (keys: { heyGen?: string; gemini?: string }) => {
       if (session?.user) {
           const userId = session.user.id;
           localStorage.setItem(`loopgenie_onboarding_${userId}`, 'true');
@@ -239,6 +240,11 @@ const App: React.FC = () => {
           setHeyGenKey(keys.heyGen);
           localStorage.setItem(STORAGE_KEY_HEYGEN, keys.heyGen);
       }
+
+      if (keys.gemini) {
+          localStorage.setItem('genavatar_gemini_key', keys.gemini);
+      }
+
       setIsOnboarding(false);
   };
 
