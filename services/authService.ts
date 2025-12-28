@@ -1,3 +1,4 @@
+
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { UserProfile } from '../types';
 
@@ -46,35 +47,55 @@ export const getSession = async () => {
 export const getUserProfile = async (userId: string): Promise<UserProfile | null> => {
   if (!isSupabaseConfigured()) {
     const user = getMockUser();
-    // HARDCODED ADMIN FOR DEMO
     const isAdmin = user?.email === 'admin@demo.com' || user?.email === 'richmondeke@gmail.com';
     return { id: userId, email: user?.email || 'mock@demo.com', credits_balance: 5, isAdmin };
   }
   
   try {
-    const { data, error } = await supabase
+    // Attempt full fetch including webhook columns
+    let { data, error } = await supabase
       .from('profiles')
-      .select('*')
+      .select('id, email, full_name, credits_balance, is_admin, webhook_url, webhook_method')
       .eq('id', userId)
       .single();
 
+    // GRACEFUL FALLBACK: If columns don't exist (Error 42703 or specific message), retry without them
+    const isMissingColumnError = error && (
+        error.code === '42703' || 
+        error.message?.toLowerCase().includes('webhook_url') || 
+        error.message?.toLowerCase().includes('does not exist') ||
+        error.message?.toLowerCase().includes('column')
+    );
+
+    if (isMissingColumnError) {
+        console.warn("[AuthService] Webhook columns missing in DB. Using fallback profile fetch.");
+        const fallback = await supabase
+          .from('profiles')
+          .select('id, email, full_name, credits_balance, is_admin')
+          .eq('id', userId)
+          .single();
+        
+        data = fallback.data;
+        error = fallback.error;
+    }
+
     if (error) {
       if (error.code === '42P17') {
-          console.error("🔥 CRITICAL DB ERROR: Infinite Recursion Detected.");
-          console.error("👉 Please run the 'Emergency Fix' script in SCHEMA.md in your Supabase SQL Editor.");
+          console.error("🔥 CRITICAL DB ERROR: Infinite Recursion Detected. Check SCHEMA.md.");
       }
       if (error.code === 'PGRST116' || error.code === '42P01') {
-        // Fallback for missing profile
         const { data: userData } = await supabase.auth.getUser();
         const email = userData.user?.email || '';
         const isAdmin = email === 'admin@demo.com' || email === 'richmondeke@gmail.com';
         return { id: userId, email, credits_balance: 5, isAdmin };
       }
+      // Log only if it wasn't the column error we handled or if the fallback also failed
       console.error("Error fetching profile:", error.message || error);
       return { id: userId, email: '', credits_balance: 5 };
     }
     
-    // Check if admin based on email or DB flag
+    if (!data) return null;
+
     const isAdmin = 
         data.email === 'admin@demo.com' || 
         data.email === 'richmondeke@gmail.com' || 
@@ -83,7 +104,9 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
     return {
         ...data,
         credits_balance: (data as any).credits_balance ?? 5,
-        isAdmin
+        isAdmin,
+        webhook_url: data.webhook_url,
+        webhook_method: data.webhook_method
     } as UserProfile;
 
   } catch (err: any) {
@@ -92,21 +115,67 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
   }
 };
 
-// NEW: Admin function to get all users
+export const updateUserProfile = async (userId: string, updates: Partial<UserProfile>): Promise<{ success: boolean; error?: string; schemaMismatch?: boolean }> => {
+    if (!isSupabaseConfigured()) {
+        return { success: true };
+    }
+
+    try {
+        const { error } = await supabase
+            .from('profiles')
+            .update(updates)
+            .eq('id', userId);
+
+        if (error) {
+            // DETECT SCHEMA MISMATCH: Column doesn't exist or is not visible in cache
+            const isMissingColumnError = 
+                error.code === '42703' || 
+                error.message?.toLowerCase().includes('column') ||
+                error.message?.toLowerCase().includes('does not exist');
+            
+            if (isMissingColumnError) {
+                console.warn("[AuthService] Update failed due to missing columns in DB. Retrying with core fields only.");
+                
+                // Identify which fields were likely problematic and strip them
+                const { webhook_url, webhook_method, ...coreUpdates } = updates as any;
+                
+                // If there are remaining core updates (like full_name), try to save those
+                if (Object.keys(coreUpdates).length > 0) {
+                    const fallback = await supabase
+                        .from('profiles')
+                        .update(coreUpdates)
+                        .eq('id', userId);
+                    
+                    if (fallback.error) throw fallback.error;
+                }
+                
+                // Return success but indicate that some fields couldn't be saved to DB
+                return { success: true, schemaMismatch: true };
+            }
+            throw error;
+        }
+        
+        // Clear cache to ensure next fetch is fresh
+        profilesCache = null;
+        
+        return { success: true };
+    } catch (e: any) {
+        // Fix: Ensure we log the message and not [object Object]
+        const errorMsg = e.message || (typeof e === 'object' ? JSON.stringify(e) : String(e));
+        console.error("Update User Profile Error:", errorMsg);
+        return { success: false, error: errorMsg };
+    }
+};
+
 export const getAllProfiles = async (forceRefresh = false): Promise<UserProfile[]> => {
-    // Return cached data if available and fresh
     if (!forceRefresh && profilesCache && (Date.now() - profilesCache.timestamp < CACHE_TTL)) {
         return profilesCache.data;
     }
 
-    // MOCK DATA for Admin Dashboard Demo
     if (!isSupabaseConfigured()) {
         return [
             { id: '1', email: 'admin@demo.com', full_name: 'Admin User', credits_balance: 999, isAdmin: true },
-            { id: '2', email: 'sarah@creative.com', full_name: 'Sarah Creative', credits_balance: 12, isAdmin: false },
-            { id: '3', email: 'mike@business.com', full_name: 'Mike Business', credits_balance: 45, isAdmin: false },
-            { id: '4', email: 'new@user.com', full_name: 'New User', credits_balance: 5, isAdmin: false },
-            { id: '5', email: 'demo@tester.com', full_name: 'Demo Tester', credits_balance: 0, isAdmin: false },
+            { id: '2', email: 'user@demo.com', full_name: 'Demo User', credits_balance: 15, isAdmin: false },
         ];
     }
 
@@ -114,38 +183,27 @@ export const getAllProfiles = async (forceRefresh = false): Promise<UserProfile[
         const { data, error } = await supabase
             .from('profiles')
             .select('*')
-            .order('updated_at', { ascending: false }); // Use updated_at which is safe
+            .order('updated_at', { ascending: false });
             
-        if (error) {
-             // Handle network failure gracefully
-             if (error.message && error.message.includes('Failed to fetch')) {
-                 console.warn("Network error fetching profiles. Returning fallback data.");
-                 throw new Error("Network Error");
-             }
-             if (error.code === '42P17') {
-                 console.error("🔥 Infinite Recursion Error in getAllProfiles. Run schema fix.");
-             }
-             throw error;
-        }
+        if (error) throw error;
         
         const mapped = data.map((p: any) => ({
             id: p.id,
             email: p.email,
             full_name: p.full_name,
             credits_balance: p.credits_balance,
-            isAdmin: p.email === 'admin@demo.com' || p.email === 'richmondeke@gmail.com' || p.is_admin
+            isAdmin: p.email === 'admin@demo.com' || p.email === 'richmondeke@gmail.com' || p.is_admin,
+            webhook_url: p.webhook_url,
+            webhook_method: p.webhook_method
         }));
 
-        // Update Cache
         profilesCache = { data: mapped, timestamp: Date.now() };
         return mapped;
 
     } catch (e) {
-        console.warn("Failed to fetch all profiles (likely permissions or network):", e);
-        // Fallback mock data if RLS blocks listing all users or network fails
+        console.warn("Failed to fetch all profiles:", e);
         return [
              { id: '1', email: 'admin@demo.com', full_name: 'Admin User', credits_balance: 999, isAdmin: true },
-             { id: '2', email: 'user@demo.com', full_name: 'Demo User', credits_balance: 15, isAdmin: false },
         ];
     }
 };
@@ -178,9 +236,7 @@ export const signUp = async (email: string, password: string, fullName: string) 
     email,
     password,
     options: {
-      data: {
-        full_name: fullName,
-      },
+      data: { full_name: fullName },
       emailRedirectTo: window.location.origin
     },
   });
@@ -228,19 +284,15 @@ export const resetPassword = async (email: string) => {
 
 export const updatePassword = async (newPassword: string) => {
     if (!isSupabaseConfigured()) return { error: null };
-    
     const { data, error } = await supabase.auth.updateUser({ 
         password: newPassword 
     });
-    
     if (error) throw error;
     return data;
 };
 
 export const getCurrentUser = async () => {
-  if (!isSupabaseConfigured()) {
-    return getMockUser();
-  }
+  if (!isSupabaseConfigured()) return getMockUser();
   const { data: { user } } = await supabase.auth.getUser();
   return user;
 };

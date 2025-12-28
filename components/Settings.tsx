@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Key, Save, Eye, EyeOff, CheckCircle, Volume2, Sparkles, RefreshCcw, ShieldCheck } from 'lucide-react';
+import { Key, Save, Eye, EyeOff, CheckCircle, Volume2, Sparkles, RefreshCcw, ShieldCheck, Video } from 'lucide-react';
 import { GEMINI_API_KEYS } from '../constants';
 
 interface SettingsProps {
@@ -23,6 +23,10 @@ export const Settings: React.FC<SettingsProps> = ({
   const [localGeminiKey, setLocalGeminiKey] = useState(localStorage.getItem('genavatar_gemini_key') || '');
   const [showGemini, setShowGemini] = useState(false);
 
+  // Kie.ai Key State
+  const [localKieKey, setLocalKieKey] = useState(localStorage.getItem('genavatar_kie_key') || '');
+  const [showKie, setShowKie] = useState(false);
+
   const [saved, setSaved] = useState(false);
 
   // Check if a default key exists in constants
@@ -32,6 +36,7 @@ export const Settings: React.FC<SettingsProps> = ({
   const handleSave = () => {
     setHeyGenKey(localHeyGen);
     localStorage.setItem('genavatar_eleven_key', localElevenKey);
+    localStorage.setItem('genavatar_kie_key', localKieKey);
     
     // If user clears the box, remove from local storage to allow fallback to constant
     if (!localGeminiKey) {
@@ -113,6 +118,29 @@ export const Settings: React.FC<SettingsProps> = ({
                               ? "Your app is currently using the embedded system key. Override it here if needed." 
                               : "Required for Scripting, Storyboard, and Veo Video generation."}
                       </p>
+                  </div>
+
+                  {/* Kie.ai Key */}
+                  <div>
+                      <label className="block text-sm font-bold text-gray-700 dark:text-gray-300 mb-2 flex items-center gap-2">
+                          Kie.ai API Key (Sora 2) <Video size={14} className="text-purple-500" />
+                      </label>
+                      <div className="relative">
+                          <input
+                              type={showKie ? "text" : "password"}
+                              value={localKieKey}
+                              onChange={(e) => setLocalKieKey(e.target.value)}
+                              className="w-full pl-4 pr-10 py-3 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-500/50 focus:border-indigo-500 outline-none transition-all text-sm text-gray-900 dark:text-white"
+                              placeholder="Enter Kie.ai API Key"
+                          />
+                          <button
+                              onClick={() => setShowKie(!showKie)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                          >
+                              {showKie ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 ml-1">Required for OpenAI Sora 2 video generation.</p>
                   </div>
 
                   <div className="border-t border-gray-100 dark:border-gray-700" />

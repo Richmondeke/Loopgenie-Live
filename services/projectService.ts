@@ -1,6 +1,11 @@
 
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { Project, ProjectStatus } from '../types';
+import { triggerWebhook } from './webhookService';
+
+// Added missing cache variables
+let adminProjectsCache: { data: Project[], timestamp: number } | null = null;
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // --- Types ---
 const mapRowToProject = (row: any): Project => {
@@ -40,10 +45,21 @@ const mapRowToProject = (row: any): Project => {
     videoUrl: row.video_url,
     error: row.error,
     createdAt: createdAt,
-    type: pType as 'AVATAR' | 'UGC_PRODUCT' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_VIDEO',
+    type: pType as any,
     cost: row.cost || 1, 
-    user_email: row.user_email
+    user_email: row.user_email,
+    metadata: row.metadata // Load metadata if available
   };
+};
+
+// --- Project Type Sanitization for DB Enum ---
+const sanitizeProjectTypeForDB = (type?: string): string => {
+  // Common types accepted by the standard Supabase Enum
+  const allowed = ['AVATAR', 'UGC_PRODUCT', 'SHORTS', 'FASHION_SHOOT', 'TEXT_TO_VIDEO', 'AUDIOBOOK', 'IMAGE_TO_VIDEO'];
+  if (!type) return 'AVATAR';
+  if (type === 'STORYBOOK') return 'SHORTS'; // Fallback mapping for DB enum
+  if (!allowed.includes(type)) return 'AVATAR';
+  return type;
 };
 
 // --- Mock/Local Implementation ---
@@ -55,7 +71,25 @@ const getLocalProjects = (): any[] => {
 };
 
 const saveLocalProjects = (projects: any[]) => {
-  localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+  try {
+    // Attempt to save full list
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+  } catch (e) {
+    console.warn("[ProjectService] LocalStorage quota exceeded. Pruning...");
+    // Strategy: Remove 'metadata' from older projects (keep last 3 full metadata)
+    const pruned = projects.map((p, idx) => {
+        if (idx < 3) return p;
+        const { metadata, ...rest } = p;
+        return rest;
+    });
+    
+    try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(pruned));
+    } catch (e2) {
+        // Ultimate Fallback: Just keep last 10 entries without metadata
+        localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(pruned.slice(0, 10)));
+    }
+  }
 };
 
 const saveToLocalStorage = (project: Project) => {
@@ -71,7 +105,8 @@ const saveToLocalStorage = (project: Project) => {
       error: project.error,
       created_at: project.createdAt,
       project_type: project.type,
-      cost: project.cost
+      cost: project.cost,
+      metadata: project.metadata
     };
 
     if (index >= 0) {
@@ -82,9 +117,34 @@ const saveToLocalStorage = (project: Project) => {
     saveLocalProjects(projects);
 };
 
-// --- Caching ---
-let adminProjectsCache: { data: Project[], timestamp: number } | null = null;
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+/**
+ * Utility to fetch the user's webhook URL from profiles.
+ * Includes a graceful fallback if the column hasn't been added to the DB yet.
+ */
+const getUserWebhookUrl = async (userId: string): Promise<string | undefined> => {
+    const localUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
+    
+    if (!isSupabaseConfigured()) {
+        return localUrl;
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('webhook_url')
+            .eq('id', userId)
+            .single();
+        
+        // If column doesn't exist, fallback to local storage silently
+        if (error && (error.code === '42703' || error.message?.includes('webhook_url'))) {
+            return localUrl;
+        }
+        
+        return data?.webhook_url || localUrl;
+    } catch (e) {
+        return localUrl;
+    }
+};
 
 // --- Service Methods ---
 
@@ -124,7 +184,6 @@ export const fetchProjects = async (): Promise<{ projects: Project[], error?: an
 };
 
 // NEW: Lightweight Stats Fetcher
-// Fetches ONLY metadata needed for calculations, no heavy URLs or text
 export const fetchProjectStatsAdmin = async (): Promise<{ totalCost: number, totalFailed: number, totalCount: number, activeUsers: number }> => {
     if (!isSupabaseConfigured()) return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
 
@@ -248,6 +307,8 @@ export const addCredits = async (userId: string, amount: number): Promise<number
 export const saveProject = async (project: Project) => {
   if (!isSupabaseConfigured()) {
     saveToLocalStorage(project);
+    const webhookUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
+    triggerWebhook(webhookUrl, project);
     return;
   }
 
@@ -259,7 +320,7 @@ export const saveProject = async (project: Project) => {
 
   const templateIdSafe = project.templateId || 'unknown_template';
 
-  // Sanitize payload
+  // Sanitize payload and Project Type for DB enum
   const payload = {
       id: project.id,
       user_id: user.data.user.id,
@@ -270,8 +331,9 @@ export const saveProject = async (project: Project) => {
       video_url: project.videoUrl,
       error: project.error,
       created_at: project.createdAt, 
-      project_type: project.type || 'AVATAR',
-      cost: project.cost ?? 1
+      project_type: sanitizeProjectTypeForDB(project.type),
+      cost: project.cost ?? 1,
+      metadata: project.metadata // Include metadata
   };
 
   const { error } = await supabase
@@ -279,19 +341,15 @@ export const saveProject = async (project: Project) => {
     .upsert(payload);
 
   if (error) {
-    if (error.code === '42P01') {
-        saveToLocalStorage(project);
-        return;
-    }
-    // Fallbacks for missing columns
-    if (error.message?.includes('cost') || error.code === 'PGRST204') {
-        const { cost, ...safePayload } = payload;
-        await supabase.from('projects').upsert(safePayload);
-        return;
-    }
-    console.error("Save Project DB Error:", error);
-    // Don't throw if we can save locally as backup
+    console.error("Save Project DB Error:", JSON.stringify(error, null, 2));
+    // If enum or cost column or metadata is missing, we still want to save locally
     saveToLocalStorage(project);
+  }
+
+  // Handle Webhook notification on save (if completed immediately)
+  if (project.status === ProjectStatus.COMPLETED || project.status === ProjectStatus.FAILED) {
+      const webhookUrl = await getUserWebhookUrl(user.data.user.id);
+      triggerWebhook(webhookUrl, project);
   }
 };
 
@@ -305,6 +363,10 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
       if (updates.thumbnailUrl) projects[index].thumbnail_url = updates.thumbnailUrl;
       if (updates.error) projects[index].error = updates.error;
       saveLocalProjects(projects);
+      
+      const webhookUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
+      const fullProject = mapRowToProject(projects[index]);
+      triggerWebhook(webhookUrl, fullProject);
     }
     return;
   }
@@ -315,5 +377,18 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
   if (updates.thumbnailUrl) dbUpdates.thumbnail_url = updates.thumbnailUrl;
   if (updates.error) dbUpdates.error = updates.error;
 
-  await supabase.from('projects').update(dbUpdates).eq('id', id);
+  const { data: updatedProjectRow, error } = await supabase
+    .from('projects')
+    .update(dbUpdates)
+    .eq('id', id)
+    .select('*')
+    .single();
+
+  if (!error && updatedProjectRow) {
+      const fullProject = mapRowToProject(updatedProjectRow);
+      if (fullProject.status === ProjectStatus.COMPLETED || fullProject.status === ProjectStatus.FAILED) {
+          const webhookUrl = await getUserWebhookUrl(updatedProjectRow.user_id);
+          triggerWebhook(webhookUrl, fullProject);
+      }
+  }
 };

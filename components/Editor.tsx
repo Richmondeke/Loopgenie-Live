@@ -18,6 +18,7 @@ interface EditorProps {
   isGenerating: boolean;
   heyGenKey?: string;
   userCredits: number;
+  initialData?: any; // For restoring projects
 }
 
 const AvatarEditor: React.FC<EditorProps> = ({ template, onGenerate, isGenerating, heyGenKey, userCredits }) => {
@@ -304,7 +305,7 @@ const AvatarEditor: React.FC<EditorProps> = ({ template, onGenerate, isGeneratin
 };
 
 export const Editor: React.FC<EditorProps> = (props) => {
-    const { template, onBack } = props;
+    const { template, onBack, initialData } = props;
     let content;
     
     // Route to specialized editors based on template mode
@@ -315,7 +316,7 @@ export const Editor: React.FC<EditorProps> = (props) => {
     } else if (template.mode === 'FASHION_SHOOT' || template.mode === 'TEXT_TO_IMAGE' || template.mode === 'IMAGE_TO_IMAGE') {
         content = <FashionShootEditor {...props} />;
     } else if (template.mode === 'SHORTS' || template.mode === 'STORYBOOK') {
-        content = <ShortMakerEditor {...props} />;
+        content = <ShortMakerEditor {...props} initialManifest={initialData} />;
     } else {
         // Default to Avatar for AVATAR mode
         content = <AvatarEditor {...props} />;

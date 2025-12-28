@@ -1,21 +1,26 @@
+
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles, Move, Images } from 'lucide-react';
+import { Sparkles, Video, Play, Music, Image as ImageIcon, Loader2, Save, Wand2, RefreshCw, BookOpen, Smartphone, CheckCircle, Clock, Film, ChevronRight, AlertCircle, Download, Layout, RectangleHorizontal, RectangleVertical, Square, Edit2, Key, Aperture, Pause, Volume2, Upload, Trash2, Mic, History, ShieldAlert, Subtitles, Move, Images, Lock, Clapperboard, FileText, ChevronDown, Zap } from 'lucide-react';
 import { ShortMakerManifest, ProjectStatus, Template, APP_COSTS } from '../types';
-import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore } from '../services/shortMakerService';
+import { generateStory, generateSceneImage, synthesizeAudio, assembleVideo, jobStore, animateSceneWithVeo, generateSoraVideo } from '../services/shortMakerService';
 import { getApiKey, generateSpeech } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
+import { openComicBookWindow } from '../services/exportService';
+import { dispatchProjectToWebhook } from '../services/webhookService';
+import { supabase, isSupabaseConfigured } from '../supabaseClient';
 
 interface ShortMakerEditorProps {
     onBack: () => void;
     onGenerate: (data: any) => Promise<void> | void;
     userCredits: number;
     template: Template;
+    initialManifest?: ShortMakerManifest; // Support restoring state
 }
 
-type ProductionStep = 'INPUT' | 'SCRIPT' | 'VISUALS' | 'AUDIO' | 'ASSEMBLY' | 'COMPLETE';
+type ProductionStep = 'INPUT' | 'SCRIPT' | 'ANCHOR' | 'VISUALS' | 'ANIMATING' | 'AUDIO' | 'ASSEMBLY' | 'COMPLETE';
 type DurationTier = '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
 type AspectRatio = '9:16' | '16:9' | '1:1' | '4:3';
-type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro';
+type VisualModel = 'nano_banana' | 'flux' | 'gemini_pro' | 'veo' | 'sora';
 type VisualSource = 'AI' | 'PEXELS';
 type CaptionStyle = 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
 type AnimationStyle = 'ZOOM' | 'PAN' | 'STATIC';
@@ -46,10 +51,9 @@ const CAPTION_STYLES: { id: CaptionStyle; label: string }[] = [
 ];
 
 const StepIndicator = ({ current, target, label, icon: Icon }: { current: ProductionStep, target: ProductionStep, label: string, icon: any }) => {
-    const steps: ProductionStep[] = ['INPUT', 'SCRIPT', 'VISUALS', 'AUDIO', 'ASSEMBLY', 'COMPLETE'];
+    const steps: ProductionStep[] = ['INPUT', 'SCRIPT', 'ANCHOR', 'VISUALS', 'ANIMATING', 'AUDIO', 'ASSEMBLY', 'COMPLETE'];
     const cIdx = steps.indexOf(current);
     const tIdx = steps.indexOf(target);
-    
     const isActive = current === target;
     const isDone = cIdx > tIdx;
     
@@ -67,7 +71,7 @@ const StepIndicator = ({ current, target, label, icon: Icon }: { current: Produc
     );
 };
 
-export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
+export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGenerate, userCredits, template, initialManifest }) => {
     const isStorybook = template.mode === 'STORYBOOK';
     const [step, setStep] = useState<ProductionStep>('INPUT');
     const [manifest, setManifest] = useState<ShortMakerManifest | null>(null);
@@ -82,7 +86,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [duration, setDuration] = useState<DurationTier>('30s');
     const [aspectRatio, setAspectRatio] = useState<AspectRatio>(isStorybook ? '16:9' : '9:16');
     const [visualSource, setVisualSource] = useState<VisualSource>('AI');
-    const [visualModel, setVisualModel] = useState<VisualModel>('nano_banana');
+    const [visualModel, setVisualModel] = useState<VisualModel>(isStorybook ? 'veo' : 'nano_banana');
     const [animationStyle, setAnimationStyle] = useState<AnimationStyle>('ZOOM');
     
     // Captions State
@@ -107,23 +111,69 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [isSaved, setIsSaved] = useState(false);
     const [hasDraft, setHasDraft] = useState(false);
+    
+    // Webhook State
+    const [isWebhookSending, setIsWebhookSending] = useState(false);
+    const [webhookSent, setWebhookSent] = useState(false);
+    
+    // Specific loading state for individual retries
+    const [retryingSceneId, setRetryingSceneId] = useState<number | null>(null);
+    
+    // Export State
+    const [videoBlobType, setVideoBlobType] = useState<string>('');
+    const [isDownloadMenuOpen, setIsDownloadMenuOpen] = useState(false);
 
     const scrollRef = useRef<HTMLDivElement>(null);
-
-    // Helper for safe scenes access
     const safeScenes = manifest?.scenes || [];
 
-    // --- EFFECT: Reset Aspect Ratio on Template Change ---
     useEffect(() => {
         setAspectRatio(template.mode === 'STORYBOOK' ? '16:9' : '9:16');
         setStyle(template.mode === 'STORYBOOK' ? 'Watercolor Illustration' : 'Cinematic');
+        setVisualModel(template.mode === 'STORYBOOK' ? 'veo' : 'nano_banana');
     }, [template.mode]);
 
-    // --- EFFECT: SYNC WITH JOB STORE ---
+    // Check blob type whenever videoUrl changes
     useEffect(() => {
-        // 1. Initial State Load from Background Store
+        const checkBlobType = async () => {
+            if (videoUrl && videoUrl.startsWith('blob:')) {
+                try {
+                    const res = await fetch(videoUrl);
+                    const blob = await res.blob();
+                    setVideoBlobType(blob.type);
+                } catch(e) {
+                    console.warn("Failed to check blob type", e);
+                }
+            } else if (videoUrl?.startsWith('data:video/mp4')) {
+                setVideoBlobType('video/mp4');
+            } else {
+                setVideoBlobType('');
+            }
+        };
+        checkBlobType();
+    }, [videoUrl]);
+
+    // Restore from Initial Manifest (Edit Mode)
+    useEffect(() => {
+        if (initialManifest) {
+            setManifest(initialManifest);
+            setIdea(initialManifest.idea_input || initialManifest.title || '');
+            setVideoUrl(initialManifest.generated_video_url || null);
+            setStep('COMPLETE'); // Jump to complete to show result
+            // Populate basic stats
+            const sceneCount = initialManifest.scenes?.length || 0;
+            const completed = initialManifest.scenes?.filter(s => !!s.generated_image_url).length || 0;
+            setCompletedImages(completed);
+            setTotalVisualsToGen(sceneCount);
+            
+            // Restore settings if possible (optional)
+            if (initialManifest.output_settings?.captions?.style) {
+                setCaptionStyle(initialManifest.output_settings.captions.style);
+            }
+        }
+    }, [initialManifest]);
+
+    useEffect(() => {
         if (jobStore.status !== 'IDLE' && jobStore.status !== 'COMPLETED' && jobStore.status !== 'FAILED') {
-            console.log("Found active background job, restoring state...");
             setIsProcessing(true);
             setManifest(jobStore.manifest);
             setLogs(jobStore.logs);
@@ -131,7 +181,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             setCompletedImages(jobStore.completedImages);
             setTotalVisualsToGen(jobStore.totalImages);
         } else {
-            // Check LocalStorage Draft if no active memory job
             try {
                 const savedDraft = localStorage.getItem('shortmaker_draft');
                 if (savedDraft) {
@@ -144,10 +193,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
             }
         }
 
-        // 2. Subscribe to updates
         const unsubscribe = jobStore.subscribe(() => {
             setManifest(jobStore.manifest);
-            setLogs([...jobStore.logs]); // Spread to force react update
+            setLogs([...jobStore.logs]); 
             setCompletedImages(jobStore.completedImages);
             setTotalVisualsToGen(jobStore.totalImages);
             
@@ -166,68 +214,61 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
     const mapStatusToStep = (status: string): ProductionStep => {
         if (status === 'SCRIPTING') return 'SCRIPT';
         if (status === 'VISUALIZING') return 'VISUALS';
+        if (status === 'ANIMATING') return 'ANIMATING'; 
         if (status === 'NARRATING') return 'AUDIO';
         if (status === 'ASSEMBLING') return 'ASSEMBLY';
         if (status === 'COMPLETED') return 'COMPLETE';
         return 'INPUT';
     };
 
-    // Auto-save draft on manifest change - CRASH FIX: Strip images to avoid QuotaExceededError
     useEffect(() => {
         if (manifest) {
             try {
-                // Create a lightweight version of the manifest for saving
                 const lightweightManifest = {
                     ...manifest,
                     scenes: manifest.scenes.map(s => ({
                         ...s,
-                        generated_image_url: undefined // Don't save base64 images to local storage
+                        generated_image_url: undefined,
+                        generated_video_url: undefined 
                     })),
-                    generated_audio_url: undefined, // Don't save heavy audio blobs
+                    generated_audio_url: undefined,
                 };
 
                 localStorage.setItem('shortmaker_draft', JSON.stringify({
                     manifest: lightweightManifest,
-                    step: step === 'COMPLETE' ? 'INPUT' : step, // Reset to input if completed
+                    step: step === 'COMPLETE' ? 'INPUT' : step,
                     duration,
                     idea,
-                    videoUrl: null // Don't save video blob
+                    videoUrl: null 
                 }));
             } catch (e) {
-                console.warn("Failed to save draft to localStorage (likely quota exceeded). Ignoring.", e);
+                console.warn("Failed to save draft.");
             }
         }
     }, [manifest, step, duration, idea]);
 
-    // Cost Calc
     const getCost = (d: DurationTier) => {
+        let base = 9;
         switch(d) {
-            case '15s': return 5;
-            case '30s': return 9;
-            case '60s': return 16;
-            case '5m': return 60;
-            case '10m': return 100;
-            case '20m': return 180;
-            default: return 9;
+            case '15s': base = 5; break;
+            case '30s': base = 9; break;
+            case '60s': base = 16; break;
+            case '5m': base = 60; break;
+            case '10m': base = 100; break;
+            case '20m': base = 180; break;
         }
+        if (visualModel === 'veo') base = base * 2; 
+        if (visualModel === 'sora') base = base * 3; // Sora is more expensive
+        return base;
     };
     const COST = getCost(duration);
-
-    useEffect(() => {
-        return () => {
-            if (previewAudioRef.current) previewAudioRef.current.pause();
-        };
-    }, []);
 
     const addLog = (msg: string) => {
         setLogs(prev => [...prev, msg]);
         jobStore.addLog(msg);
-        if (scrollRef.current) {
-            setTimeout(() => {
-                if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-            }, 50);
-        }
+        if (scrollRef.current) setTimeout(() => { if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, 50);
     };
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
     const handleMusicUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -247,20 +288,16 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
     const playVoicePreview = async (e: React.MouseEvent, voiceId: string) => {
         e.stopPropagation();
-        
         if (playingVoicePreview === voiceId) {
             previewAudioRef.current?.pause();
             setPlayingVoicePreview(null);
             return;
         }
-
         if (previewAudioRef.current) previewAudioRef.current.pause();
         setPlayingVoicePreview(voiceId);
-
         try {
             const previewText = "Hello creator, this is a preview of my voice.";
             const url = await generateSpeech(previewText, voiceId);
-            
             const audio = new Audio(url);
             previewAudioRef.current = audio;
             audio.onended = () => setPlayingVoicePreview(null);
@@ -283,7 +320,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     const needsRegen = data.manifest.scenes.some((s: any) => !s.generated_image_url);
                     if (needsRegen) {
                         setStep('SCRIPT'); 
-                        addLog("📂 Draft restored. Visuals need regeneration (images are not saved in drafts).");
+                        addLog("📂 Draft restored. Visuals need regeneration.");
                     } else {
                         addLog("📂 Draft restored.");
                     }
@@ -322,7 +359,45 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         onBack();
     };
 
-    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    const handleSendToWebhook = async () => {
+        if (!manifest || !videoUrl) return;
+        
+        setIsWebhookSending(true);
+        try {
+            let webhookUrl = localStorage.getItem('loopgenie_webhook_url') || '';
+            let webhookMethod = localStorage.getItem('loopgenie_webhook_method') || 'POST';
+
+            if (isSupabaseConfigured()) {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user) {
+                    const { data } = await supabase.from('profiles').select('webhook_url, webhook_method').eq('id', user.id).single();
+                    if (data?.webhook_url) webhookUrl = data.webhook_url;
+                    if (data?.webhook_method) webhookMethod = data.webhook_method;
+                }
+            }
+
+            if (!webhookUrl) {
+                alert("No Webhook URL configured. Please set one up in the Integrations tab.");
+                setIsDownloadMenuOpen(false);
+                return;
+            }
+
+            const result = await dispatchProjectToWebhook(webhookUrl, manifest, webhookMethod);
+            if (result.success) {
+                setWebhookSent(true);
+                setTimeout(() => setWebhookSent(false), 3000);
+                addLog("🚀 Data pushed to Webhook successfully.");
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (e: any) {
+            console.error("Webhook dispatch failed:", e);
+            alert("Webhook Error: " + e.message);
+        } finally {
+            setIsWebhookSending(false);
+            setIsDownloadMenuOpen(false);
+        }
+    };
 
     const generateImageWithRetry = async (
         scene: any, 
@@ -330,27 +405,66 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         style: string, 
         aspectRatio: string, 
         model: VisualModel,
-        source: VisualSource
+        source: VisualSource,
+        anchorUrl?: string
     ) => {
         let url = '';
         let attempts = 0;
-        const maxAttempts = 3;
+        const maxAttempts = 2; // Reduced attempts since internal fallback handles retries
 
         while (!url && attempts < maxAttempts) {
             try {
-                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model, source);
+                url = await generateSceneImage(scene, globalSeed, style, aspectRatio, model, source, anchorUrl);
             } catch (err: any) {
-                if (err.message?.includes('PERMISSION_DENIED') || err.message?.includes('403')) {
-                     console.warn(`Permission denied for ${model}, switching to fallback.`);
-                     throw new Error('PERMISSION_DENIED');
-                }
+                console.error("Retry wrapper caught error:", err);
                 attempts++;
-                const delay = attempts * 2000;
-                console.warn(`Scene ${scene.scene_number} retry ${attempts} (${model})...`);
-                await sleep(delay);
+                await sleep(1000);
             }
         }
         return url;
+    };
+
+    const retryScene = async (scene: any) => {
+        if (!manifest) return;
+        const idx = manifest.scenes.findIndex(s => s.scene_number === scene.scene_number);
+        if (idx === -1) return;
+
+        setRetryingSceneId(scene.scene_number);
+        addLog(`🔄 Retrying Scene ${scene.scene_number}...`);
+
+        try {
+            // Determine model - ensure we use the correct one
+            const modelToUse = visualModel; // Service now handles fallback internally
+            const generationSeed = manifest.seed || Math.random().toString();
+            
+            const url = await generateImageWithRetry(
+                scene, 
+                generationSeed, 
+                style, 
+                aspectRatio, 
+                modelToUse, 
+                visualSource, 
+                manifest.scenes[0]?.generated_image_url
+            );
+            
+            if (url) {
+                const updatedScenes = [...manifest.scenes];
+                updatedScenes[idx].generated_image_url = url;
+                const newManifest = { ...manifest, scenes: updatedScenes };
+                
+                setManifest(newManifest);
+                jobStore.update({ manifest: newManifest });
+                addLog(`✅ Scene ${scene.scene_number} regenerated successfully.`);
+            } else {
+                addLog(`❌ Retry failed for Scene ${scene.scene_number}.`);
+                alert(`Failed to regenerate Scene ${scene.scene_number}. Try changing the visual style.`);
+            }
+        } catch (e: any) {
+            console.error(e);
+            addLog(`❌ Retry error: ${e.message}`);
+        } finally {
+            setRetryingSceneId(null);
+        }
     };
 
     const runProduction = async (resume: boolean = false) => {
@@ -358,10 +472,11 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         setIsProcessing(true);
         setErrorMsg('');
         setIsSaved(false);
-        
         if (!resume) jobStore.reset();
 
-        let currentVisualModel = visualModel;
+        const isVeoMode = visualModel === 'veo';
+        const isSoraMode = visualModel === 'sora';
+        const modelToUse = visualModel; // Service handles logic based on string
 
         if (!resume) {
             setStep('SCRIPT');
@@ -377,11 +492,10 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         try {
             // STEP 1: SCRIPT
             let currentManifest: ShortMakerManifest | null = resume ? manifest : null;
-
             if (!currentManifest) {
                 setStep('SCRIPT');
                 const isLongForm = ['5m', '10m', '20m'].includes(duration);
-                addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form mode active)' : ''}`);
+                addLog(`🧠 Dreaming up ${scriptStyle} story (${duration})... ${isLongForm ? '(Long-form)' : ''}`);
                 
                 currentManifest = await generateStory({
                     idea,
@@ -394,11 +508,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     scriptStyle: scriptStyle
                 });
                 
-                // Set settings based on UI selection
-                currentManifest.output_settings.captions = {
-                    enabled: captionsEnabled,
-                    style: captionStyle
-                };
+                currentManifest.output_settings.captions = { enabled: captionsEnabled, style: captionStyle };
                 currentManifest.output_settings.visual_source = visualSource;
                 currentManifest.output_settings.animation = animationStyle;
                 
@@ -408,189 +518,180 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
             if (!currentManifest) throw new Error("Failed to initialize story.");
 
-            // STEP 2: VISUALS
-            setStep('VISUALS');
-            jobStore.update({ status: 'VISUALIZING' });
-            
+            // STEP 2: CONSISTENCY ANCHOR
             const workingScenes = [...currentManifest.scenes];
             const generationSeed = currentManifest.seed || Math.random().toString();
+            let anchorUrl = workingScenes[0]?.generated_image_url;
+
+            if (visualSource === 'AI' && workingScenes.length > 0 && (!anchorUrl)) {
+                 setStep('ANCHOR');
+                 addLog("⚓ Establishing character identity (Anchor Scene)...");
+                 
+                 // Generate anchor image - service handles fallback chain (Pro -> Flash -> Flux)
+                 anchorUrl = await generateImageWithRetry(workingScenes[0], generationSeed, style, aspectRatio, modelToUse, 'AI');
+
+                 if (anchorUrl) {
+                     workingScenes[0].generated_image_url = anchorUrl;
+                     jobStore.update({ manifest: { ...currentManifest, scenes: [...workingScenes] }, completedImages: 1 });
+                     setManifest({ ...currentManifest, scenes: [...workingScenes] });
+                     addLog("👁️ Character Identity Established.");
+                 } else {
+                     console.warn("Anchor generation failed.");
+                     // Do not set a placeholder. Let UI show retry state.
+                 }
+            }
+
+            // STEP 3: VISUALS
+            setStep('VISUALS');
+            jobStore.update({ status: 'VISUALIZING', totalImages: workingScenes.length });
             
-            // Failsafe: Filter out already generated scenes
-            const missingScenes = workingScenes.filter(s => !s.generated_image_url || s.generated_image_url.includes('placeholder'));
-            
-            jobStore.update({ 
-                manifest: currentManifest, 
-                totalImages: workingScenes.length,
-                completedImages: workingScenes.length - missingScenes.length 
-            });
-            
+            const missingScenes = workingScenes.filter(s => !s.generated_image_url);
             setTotalVisualsToGen(workingScenes.length);
             setCompletedImages(workingScenes.length - missingScenes.length);
 
             if (missingScenes.length > 0) {
-                addLog(`🎨 Gathering visuals (${missingScenes.length} remaining)...`);
-                
+                addLog(`🎨 Generating ${missingScenes.length} consistent frames...`);
                 const BATCH_SIZE = 2;
                 for (let i = 0; i < missingScenes.length; i += BATCH_SIZE) {
                     const batch = missingScenes.slice(i, i + BATCH_SIZE);
-                    
                     await Promise.all(batch.map(async (scene) => {
                         const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
-                        if (idx === -1) return; 
-
-                        let url = '';
-                        try {
-                            url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, currentVisualModel, visualSource);
-                        } catch (err: any) {
-                             if (err.message === 'PERMISSION_DENIED') {
-                                 if (currentVisualModel !== 'flux' && visualSource === 'AI') {
-                                    addLog(`⚠️ Permissions issue. Switching to Flux for subsequent images.`);
-                                    currentVisualModel = 'flux';
-                                 }
-                                 // Immediate retry
-                                 try {
-                                     url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux', visualSource);
-                                 } catch(e) {}
-                             }
-                        }
-
-                        if (url) {
-                            workingScenes[idx].generated_image_url = url;
-                        } 
-                        // Update Store incrementally
-                        const currentCount = workingScenes.filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder')).length;
-                        jobStore.update({
-                            manifest: { ...currentManifest!, scenes: [...workingScenes] },
-                            completedImages: currentCount
+                        if (idx === -1) return;
+                        
+                        let url = await generateImageWithRetry(scene, generationSeed, style, aspectRatio, modelToUse, visualSource, anchorUrl);
+                        
+                        if (url) workingScenes[idx].generated_image_url = url;
+                        
+                        jobStore.update({ 
+                            manifest: { ...currentManifest!, scenes: [...workingScenes] }, 
+                            completedImages: workingScenes.filter(s => !!s.generated_image_url).length 
                         });
                     }));
-                    
-                    if (i + BATCH_SIZE < missingScenes.length) {
-                        await sleep(1000); 
-                    }
-                }
-            }
-
-            // --- RESCUE PHASE ---
-            const failedScenes = workingScenes.filter(s => !s.generated_image_url);
-            if (failedScenes.length > 0) {
-                addLog(`⚠️ ${failedScenes.length} scenes missed in first pass. Entering rescue mode...`);
-                
-                for (const scene of failedScenes) {
-                    const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
-                    if (idx === -1) continue;
-
-                    addLog(`⛑️ Rescuing Scene ${scene.scene_number} with fallback...`);
-                    try {
-                        const url = await generateSceneImage(scene, generationSeed, style, aspectRatio, 'flux', 'AI'); // Fallback to AI Flux even if Pexels failed
-                        if (url) {
-                            workingScenes[idx].generated_image_url = url;
-                            addLog(`✅ Scene ${scene.scene_number} rescued.`);
-                        } else {
-                            throw new Error("Rescue failed");
-                        }
-                    } catch (e) {
-                        console.error(`Rescue failed for scene ${scene.scene_number}`, e);
-                        workingScenes[idx].generated_image_url = `https://via.placeholder.com/1080x1920/000000/FFFFFF?text=Scene+${scene.scene_number}+Failed`;
-                        addLog(`❌ Scene ${scene.scene_number} permanently failed.`);
-                    }
-                    
-                    jobStore.update({
-                        manifest: { ...currentManifest!, scenes: [...workingScenes] },
-                        completedImages: workingScenes.filter(s => !!s.generated_image_url).length
-                    });
-                    
-                    await sleep(1500); 
                 }
             }
             
             currentManifest = { ...currentManifest, scenes: workingScenes };
             setManifest(currentManifest);
-            addLog("✅ Visual phase complete.");
 
-            // STEP 3: AUDIO
+            // STEP 3.5: VEO / SORA ANIMATION
+            if (isVeoMode || isSoraMode) {
+                setStep('ANIMATING');
+                jobStore.update({ status: 'ANIMATING' });
+                addLog(`🎥 ${isSoraMode ? 'Sora 2' : 'Veo 3'}: Converting static frames to video clips...`);
+                
+                const scenesToAnimate = workingScenes.filter(s => !s.generated_video_url);
+                for (let i = 0; i < scenesToAnimate.length; i++) {
+                    const scene = scenesToAnimate[i];
+                    addLog(`🎬 Animating Scene ${scene.scene_number} (${i+1}/${scenesToAnimate.length})...`);
+                    try {
+                        const motionPrompt = scene.camera_directive || "Cinematic slow motion";
+                        let videoUrl = "";
+
+                        if (isSoraMode) {
+                            videoUrl = await generateSoraVideo(
+                                `${scene.image_prompt} ${motionPrompt}`,
+                                scene.generated_image_url!,
+                                aspectRatio
+                            );
+                        } else {
+                            // Veo Mode
+                            videoUrl = await animateSceneWithVeo(
+                                scene.generated_image_url!, 
+                                motionPrompt,
+                                aspectRatio
+                            );
+                        }
+
+                        const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
+                        if (idx !== -1) workingScenes[idx].generated_video_url = videoUrl;
+                        
+                        jobStore.update({ manifest: { ...currentManifest, scenes: [...workingScenes] } });
+                    } catch(e: any) {
+                        console.warn(`Animation failed for scene ${scene.scene_number}.`);
+                        addLog(`⚠️ I2V failed for scene ${scene.scene_number}. Using Text-to-Video fallback.`);
+                        
+                        try {
+                            const motionPrompt = scene.camera_directive || "Cinematic slow motion";
+                            let videoUrl = "";
+                            
+                            // Fallback: Text-to-Video
+                            if (isSoraMode) {
+                                // Sora might not support T2V purely via the same endpoint without image, 
+                                // but if it does, logic goes here. Kie.ai wrapper usually requires image for I2V.
+                                // If image fails, we skip to static.
+                                throw new Error("Sora T2V fallback not fully supported in this context.");
+                            } else {
+                                // Veo T2V Fallback
+                                videoUrl = await animateSceneWithVeo(
+                                    undefined, 
+                                    `${scene.image_prompt} ${motionPrompt}`,
+                                    aspectRatio
+                                );
+                            }
+
+                            const idx = workingScenes.findIndex(s => s.scene_number === scene.scene_number);
+                            if (idx !== -1) workingScenes[idx].generated_video_url = videoUrl;
+                            
+                            jobStore.update({ manifest: { ...currentManifest, scenes: [...workingScenes] } });
+                        } catch (e2) {
+                            addLog(`❌ Animation failed for scene ${scene.scene_number}. Will use static image.`);
+                        }
+                    }
+                }
+                currentManifest = { ...currentManifest, scenes: workingScenes };
+                setManifest(currentManifest);
+            }
+
+            // STEP 4: AUDIO
             setStep('AUDIO');
-            
-            // Check if audio needs generation (if any scene lacks audio url)
-            const needsAudio = currentManifest.scenes.some(s => !s.generated_audio_url);
-
+            const needsAudio = currentManifest.scenes.some(s => !s.generated_audio_url) && !currentManifest.generated_audio_url;
             if (needsAudio) {
                 addLog(`🎙️ Synthesizing voiceover (${selectedVoice})...`);
                 const elevenKey = localStorage.getItem('genavatar_eleven_key');
                 try {
-                    const updatedManifest = await synthesizeAudio(
-                        currentManifest, 
-                        elevenKey || undefined, 
-                        selectedVoice 
-                    );
-                    currentManifest = updatedManifest; // Update with audio URLs
-                    addLog(`✅ Audio recording complete.`);
-                } catch (err: any) {
-                    console.warn(err);
-                    addLog("⚠️ Audio issues: " + err.message);
-                }
-                
-                // Update Store
-                jobStore.update({ manifest: currentManifest });
-                setManifest(currentManifest);
+                    const updatedManifest = await synthesizeAudio(currentManifest, elevenKey || undefined, selectedVoice);
+                    currentManifest = updatedManifest;
+                } catch (err: any) { addLog("⚠️ Audio issues: " + err.message); }
             }
+            jobStore.update({ manifest: currentManifest });
 
-            // STEP 4: ASSEMBLY
+            // STEP 5: ASSEMBLY
             setStep('ASSEMBLY');
-            if (resume && videoUrl) {
-                 addLog("⏩ Video already built.");
-            } else {
-                addLog("🎬 Stitching video... (Syncing scene duration to voiceover)");
-                
-                // Ensure caption settings are up to date from UI if resuming or starting late
-                if (!currentManifest.output_settings.captions) {
-                    currentManifest.output_settings.captions = {
-                        enabled: captionsEnabled,
-                        style: captionStyle
-                    };
-                }
-                currentManifest.output_settings.animation = animationStyle;
+            addLog("🎬 Stitching final video...");
+            const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
+            setVideoUrl(finalVideoUrl);
+            jobStore.update({ videoUrl: finalVideoUrl, status: 'COMPLETED' });
+            
+            // Populate manifest with final URL for persistence
+            currentManifest = { ...currentManifest, generated_video_url: finalVideoUrl };
+            setManifest(currentManifest);
 
-                const finalVideoUrl = await assembleVideo(currentManifest, bgMusic || undefined);
-                setVideoUrl(finalVideoUrl);
-                jobStore.update({ videoUrl: finalVideoUrl, status: 'COMPLETED' });
-                addLog("✅ Production Complete!");
+            // STEP 6: SAVE
+            setStep('COMPLETE');
+            addLog("☁️ Saving to cloud...");
+            try {
+                const permanentVideoUrl = await uploadToStorage(
+                    finalVideoUrl, 
+                    `${isStorybook ? 'story' : 'short'}_${Date.now()}.mp4`, 
+                    'stories'
+                );
                 
-                // STEP 5: SAVE
-                setStep('COMPLETE');
-                addLog("☁️ Saving to cloud...");
-                try {
-                    const permanentVideoUrl = await uploadToStorage(
-                        finalVideoUrl, 
-                        `${isStorybook ? 'story' : 'short'}_${Date.now()}.webm`, 
-                        'stories'
-                    );
-                    
-                    let thumbUrl = currentManifest.scenes[0]?.generated_image_url;
-                    try {
-                        if (thumbUrl && thumbUrl.startsWith('data:')) {
-                             // Upload thumbnail if it's base64, otherwise keep as is
-                             thumbUrl = await uploadToStorage(thumbUrl, `thumb_${Date.now()}.png`, 'thumbnails');
-                        }
-                    } catch(e) {}
-
-                    await onGenerate({
-                        isDirectSave: true,
-                        videoUrl: permanentVideoUrl, 
-                        thumbnailUrl: thumbUrl,
-                        cost: COST,
-                        templateName: currentManifest.title || 'Untitled Video',
-                        type: isStorybook ? 'STORYBOOK' : 'SHORTS',
-                        shouldRedirect: false
-                    });
-                    setIsSaved(true);
-                    // FIXED: Removed jobStore.reset() to prevent view switching immediately
-                    localStorage.removeItem('shortmaker_draft');
-                    addLog("💾 Saved to My Projects.");
-                } catch (saveError: any) {
-                    console.error("Save error:", saveError);
-                    addLog(`❌ Save failed: ${saveError.message}. Please download manually.`);
-                }
+                await onGenerate({
+                    isDirectSave: true,
+                    videoUrl: permanentVideoUrl, 
+                    thumbnailUrl: currentManifest.scenes[0]?.generated_image_url,
+                    cost: COST,
+                    templateName: currentManifest.title || 'Untitled Video',
+                    type: isStorybook ? 'STORYBOOK' : 'SHORTS',
+                    shouldRedirect: false,
+                    manifest: currentManifest // SAVE WORKFLOW
+                });
+                setIsSaved(true);
+                localStorage.removeItem('shortmaker_draft');
+                addLog("💾 Saved to My Projects.");
+            } catch (saveError: any) {
+                console.error("Save error:", saveError);
+                addLog(`❌ Save failed: ${saveError.message}. Please download manually.`);
             }
 
         } catch (e: any) {
@@ -603,14 +704,35 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         }
     };
 
-    const getPreviewClass = () => {
-        // Base container styles for the video player
-        switch(aspectRatio) {
-            case '16:9': return 'w-full aspect-video max-w-2xl';
-            case '1:1': return 'w-full aspect-square max-w-md';
-            case '4:3': return 'w-full aspect-[4/3] max-w-lg';
-            default: return 'w-full aspect-[9/16] max-w-xs'; // 9:16 default
+    const renderVisualModelSelect = () => (
+        <select 
+            value={visualModel}
+            onChange={(e) => setVisualModel(e.target.value as VisualModel)}
+            className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
+        >
+            <option value="nano_banana">Nano Banana (Fast)</option>
+            <option value="flux">Flux (Creative)</option>
+            <option value="gemini_pro">Gemini 3 Pro (HD)</option>
+            <option value="veo">Veo 3 (Google)</option>
+            <option value="sora">Sora 2 (Kie.ai)</option>
+        </select>
+    );
+
+    const handleComicExport = () => {
+        if (manifest) {
+            openComicBookWindow(manifest);
+            setIsDownloadMenuOpen(false);
         }
+    };
+
+    // Helper to determine download extension and label
+    const getVideoDownloadProps = () => {
+        const isWebM = videoBlobType.includes('webm');
+        const ext = isWebM ? 'webm' : 'mp4';
+        return {
+            ext,
+            label: `Video (${ext.toUpperCase()})`
+        };
     };
 
     if (step === 'INPUT') {
@@ -638,8 +760,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
-                        
-                        {/* LEFT COLUMN: Concept & Visuals */}
+                        {/* LEFT COLUMN */}
                         <div className="lg:col-span-7 space-y-6">
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Video Idea</label>
@@ -687,15 +808,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Visual Model</label>
-                                        <select 
-                                            value={visualModel}
-                                            onChange={(e) => setVisualModel(e.target.value as VisualModel)}
-                                            className="w-full bg-black/40 border border-gray-700 rounded-lg p-2.5 text-white outline-none focus:border-blue-500 text-sm"
-                                        >
-                                            <option value="nano_banana">Nano Banana (Fast)</option>
-                                            <option value="flux">Flux (Creative)</option>
-                                            <option value="gemini_pro">Gemini 3 Pro (HD)</option>
-                                        </select>
+                                        {renderVisualModelSelect()}
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Art Style</label>
@@ -785,10 +898,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             </div>
                         </div>
 
-                        {/* RIGHT COLUMN: Audio & Generate */}
+                        {/* RIGHT COLUMN */}
                         <div className="lg:col-span-5 flex flex-col gap-6">
-                            
-                            {/* Voice Selection Grid */}
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Voice Actor</label>
                                 <div className="grid grid-cols-2 gap-3 h-32 overflow-y-auto pr-1 custom-scrollbar mb-4">
@@ -827,7 +938,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </div>
                             </div>
 
-                            {/* Caption Controls */}
                             <div className="p-4 bg-black/40 border border-gray-700 rounded-xl">
                                 <div className="flex items-center justify-between mb-3">
                                     <label className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2">
@@ -860,7 +970,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 )}
                             </div>
 
-                            {/* Background Music Upload */}
                             <div>
                                 <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Background Music (Optional)</label>
                                 <div className={`relative p-4 rounded-xl border border-dashed transition-all ${
@@ -894,7 +1003,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                 </div>
                             </div>
 
-                            {/* GENERATE BUTTON */}
                             <button
                                 onClick={() => runProduction(false)}
                                 disabled={!idea.trim() || userCredits < COST}
@@ -915,10 +1023,8 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
         );
     }
 
-    // ... (rest of component remains same) ...
     return (
         <div className="h-full bg-black text-white flex flex-col md:flex-row overflow-hidden">
-             {/* Left Progress Panel */}
              <div className="w-full md:w-[320px] bg-gray-900 border-r border-gray-800 flex flex-col z-20 shadow-xl">
                  <div className="p-6 border-b border-gray-800 bg-gray-900">
                      <div className="flex items-center gap-3 mb-2">
@@ -934,7 +1040,9 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
 
                  <div className="flex-1 p-4 overflow-y-auto space-y-2 custom-scrollbar">
                      <StepIndicator current={step} target="SCRIPT" label="Writing Script" icon={Edit2} />
+                     <StepIndicator current={step} target="ANCHOR" label="Establishing Character" icon={Lock} />
                      <StepIndicator current={step} target="VISUALS" label={`Gathering Visuals (${completedImages}/${totalVisualsToGen})`} icon={ImageIcon} />
+                     {(visualModel === 'veo' || visualModel === 'sora') && <StepIndicator current={step} target="ANIMATING" label={`Animating (${visualModel === 'sora' ? 'Sora' : 'Veo'})`} icon={Clapperboard} />}
                      <StepIndicator current={step} target="AUDIO" label="Synthesizing Voice" icon={Mic} />
                      <StepIndicator current={step} target="ASSEMBLY" label="Stitching Video" icon={Film} />
                      
@@ -957,14 +1065,12 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                  </div>
              </div>
 
-             {/* Right Preview Panel - Fixed Padding */}
              <div className="flex-1 bg-black relative p-0 overflow-hidden">
-                 {/* Background Grid */}
                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#333 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
 
                  <div className="h-full w-full overflow-y-auto pt-4 pb-32 px-8 flex flex-col items-center"> 
                      {videoUrl ? (
-                         <div className={`relative z-10 mx-auto animate-in zoom-in duration-500 mt-10 ${getPreviewClass()}`}>
+                         <div className={`relative z-10 mx-auto animate-in zoom-in duration-500 mt-10 w-full aspect-[9/16] max-w-xs`}>
                              <div className="relative w-full h-full rounded-2xl overflow-hidden shadow-2xl border border-gray-800 bg-gray-900 group">
                                  <video 
                                     src={videoUrl} 
@@ -975,14 +1081,61 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                  />
                              </div>
                              
-                             <div className="mt-6 flex flex-col gap-3 w-full">
-                                 <a 
-                                    href={videoUrl} 
-                                    download="short_video.webm" 
-                                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all"
-                                 >
-                                     <Download size={18} /> Download Video
-                                 </a>
+                             <div className="mt-6 flex flex-col gap-3 w-full relative">
+                                <div className="relative">
+                                    <button 
+                                        onClick={() => setIsDownloadMenuOpen(!isDownloadMenuOpen)}
+                                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg hover:shadow-indigo-500/25 transition-all"
+                                    >
+                                        <Download size={18} /> Download Options <ChevronDown size={16} />
+                                    </button>
+                                    
+                                    {isDownloadMenuOpen && (
+                                        <div className="absolute bottom-full left-0 w-full mb-2 bg-gray-800 border border-gray-700 rounded-xl shadow-xl overflow-hidden z-30 animate-in slide-in-from-bottom-2 fade-in">
+                                            {/* Webhook Option */}
+                                            <button 
+                                                onClick={handleSendToWebhook}
+                                                disabled={isWebhookSending}
+                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-700 text-white text-sm font-medium transition-colors border-b border-gray-700/50 disabled:opacity-50"
+                                            >
+                                                {isWebhookSending ? <Loader2 size={16} className="animate-spin text-orange-400" /> : <Zap size={16} className="text-orange-400" fill="currentColor" />}
+                                                {webhookSent ? 'Sent to Webhook!' : 'Send to Webhook'}
+                                            </button>
+
+                                            {/* MP4 Option */}
+                                            <a 
+                                                href={videoUrl} 
+                                                download={`video-${Date.now()}.mp4`}
+                                                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700 text-white text-sm font-medium transition-colors border-b border-gray-700/50"
+                                                onClick={() => setIsDownloadMenuOpen(false)}
+                                            >
+                                                <Film size={16} className="text-blue-400" />
+                                                Download as MP4
+                                            </a>
+
+                                            {/* WebM Option */}
+                                            <a 
+                                                href={videoUrl} 
+                                                download={`video-${Date.now()}.webm`}
+                                                className="flex items-center gap-3 px-4 py-3 hover:bg-gray-700 text-white text-sm font-medium transition-colors border-b border-gray-700/50"
+                                                onClick={() => setIsDownloadMenuOpen(false)}
+                                            >
+                                                <Film size={16} className="text-pink-400" />
+                                                Download as WebM
+                                            </a>
+                                            
+                                            {/* Comic Option */}
+                                            <button 
+                                                onClick={handleComicExport}
+                                                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-700 text-white text-sm font-medium transition-colors text-left"
+                                            >
+                                                <FileText size={16} className="text-orange-400" />
+                                                Comic Book PDF
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
                                  <div className="flex gap-3">
                                      <button onClick={() => runProduction(true)} className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-bold text-sm border border-gray-700">
                                          Regenerate
@@ -992,6 +1145,7 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                                      </button>
                                  </div>
                                  {isSaved && <p className="text-center text-green-500 text-xs font-bold mt-1">Saved to My Projects</p>}
+                                 {webhookSent && <p className="text-center text-orange-500 text-xs font-bold">Successfully Pushed to Webhook</p>}
                              </div>
                          </div>
                      ) : errorMsg ? (
@@ -1011,7 +1165,6 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                              </div>
                          </div>
                      ) : manifest ? (
-                        // Live Production View
                         <div className="relative z-10 w-full max-w-4xl mx-auto flex flex-col gap-6 animate-in fade-in duration-500">
                             <div className="text-center mb-4">
                                 <h2 className="text-2xl font-bold text-white mb-2">{manifest.title || "Untitled Story"}</h2>
@@ -1020,21 +1173,47 @@ export const ShortMakerEditor: React.FC<ShortMakerEditorProps> = ({ onBack, onGe
                             
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                 {safeScenes.map((scene, idx) => (
-                                    <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col">
+                                    <div key={idx} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden flex flex-col group">
                                         <div className="aspect-[9/16] bg-gray-800 relative">
                                             {scene?.generated_image_url ? (
-                                                <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
+                                                <>
+                                                    <img src={scene.generated_image_url} className="w-full h-full object-cover animate-in fade-in duration-500" />
+                                                    <a 
+                                                        href={scene.generated_image_url} 
+                                                        download={`scene-${scene.scene_number}.png`}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        className="absolute bottom-2 right-2 p-2 bg-black/60 hover:bg-indigo-600 text-white rounded-full backdrop-blur-md opacity-0 group-hover:opacity-100 transition-all z-20 shadow-lg"
+                                                        title="Download Frame"
+                                                    >
+                                                        <Download size={14} />
+                                                    </a>
+                                                </>
                                             ) : (
                                                 <div className="absolute inset-0 flex items-center justify-center flex-col gap-2 p-2 text-center">
-                                                    {idx < completedImages ? (
+                                                    {idx < completedImages || retryingSceneId === scene.scene_number ? (
                                                         <Loader2 className="animate-spin text-gray-600" />
+                                                    ) : !isProcessing ? (
+                                                        <div className="flex flex-col items-center gap-2 animate-in zoom-in">
+                                                            <AlertCircle className="text-red-500" size={24} />
+                                                            <span className="text-xs text-red-400 font-bold">Generation Failed</span>
+                                                            <button 
+                                                                onClick={(e) => { e.stopPropagation(); retryScene(scene); }}
+                                                                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-[10px] text-white font-bold transition-all hover:scale-105"
+                                                            >
+                                                                Retry Scene
+                                                            </button>
+                                                        </div>
                                                     ) : (
                                                         <span className="text-xs text-gray-600 font-mono">Prompting...</span>
                                                     )}
-                                                    <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene?.image_prompt || `Generating Scene ${idx + 1}...`}</span>
+                                                    
+                                                    {(idx < completedImages || isProcessing) && (
+                                                        <span className="text-[10px] text-gray-500 leading-tight line-clamp-3 px-2">{scene?.image_prompt || `Generating Scene ${idx + 1}...`}</span>
+                                                    )}
                                                 </div>
                                             )}
                                             <div className="absolute top-2 left-2 bg-black/60 px-2 py-1 rounded text-xs font-bold border border-white/10">{scene?.scene_number || idx + 1}</div>
+                                            {idx === 0 && <div className="absolute top-2 right-2 bg-indigo-600 px-2 py-1 rounded text-[10px] font-bold shadow-lg">ANCHOR</div>}
                                         </div>
                                         <div className="p-3 text-[10px] text-gray-400 leading-tight h-16 overflow-y-auto border-t border-gray-800">
                                             {scene?.narration_text}

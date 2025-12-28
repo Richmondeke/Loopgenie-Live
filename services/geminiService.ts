@@ -1,58 +1,88 @@
+
 import { ScriptGenerationRequest } from "../types";
 import { supabase } from "../supabaseClient";
 
-// Generic Helper to call the Edge Function
+// Generic Helper to call the Edge Function with Retry
 export const invokeGemini = async (action: string, payload: any) => {
-    // Inject API Key from Local Storage if available (User Override)
     let userApiKey = localStorage.getItem('genavatar_gemini_key');
     if (userApiKey && !userApiKey.trim()) {
-        userApiKey = null; // Treat whitespace/empty as null
+        userApiKey = null; 
     } else if (userApiKey) {
         userApiKey = userApiKey.trim();
     }
 
-    const { data, error } = await supabase.functions.invoke('gemini-api', {
-        body: { 
-            action, 
-            payload: { ...payload, apiKey: userApiKey } 
-        }
-    });
-
-    if (error) {
-        // Try to see if there is a response body in the error context (often Supabase hides it)
-        // If data is null but error is present, it might be a 500.
-        // However, supabase-js doesn't easily give the body of a 500 response.
-        // BUT, if the Edge function returns a Response object with status 500, `supabase.functions.invoke`
-        // might treat it as a successful network call with `data` containing the body, OR it might populate `error`.
-        // Let's assume if `data` has an `error` field, we use it.
-        
-        console.error(`Gemini Edge Function Error (${action}):`, error);
-        
-        // If we can extract a context message
-        let detailedMessage = error.message || "Failed to contact AI service.";
-        if (error.context && typeof error.context === 'object') {
-             // Sometimes context contains the response text
-             try {
-                 const body = await (error.context as Response).json();
-                 if (body && body.error) detailedMessage = body.error;
-             } catch(e) {
-                 // ignore
-             }
-        }
-        
-        throw new Error(detailedMessage);
-    }
+    const kieApiKey = localStorage.getItem('genavatar_kie_key');
     
-    // Check if the function returned a JSON with an error property (handled in our new try/catch block)
-    if (data && data.error) {
-        console.error("Gemini Logic Error:", data.error);
-        throw new Error(data.error);
-    }
+    let retries = 3;
+    while (retries > 0) {
+        try {
+            const { data, error } = await supabase.functions.invoke('gemini-api', {
+                body: { 
+                    action, 
+                    payload: { ...payload, apiKey: userApiKey, kieApiKey: kieApiKey } 
+                }
+            });
 
-    return data;
+            if (error) {
+                let detailedMessage = "Failed to contact AI service.";
+                
+                // --- HARDENED ERROR PARSING ---
+                if (error.context && typeof error.context === 'object' && 'json' in error.context) {
+                     try {
+                         const body = await (error.context as Response).json();
+                         if (body && body.error) {
+                             const err = body.error;
+                             // Detect 429 / Resource Exhausted
+                             if (err.status === 'RESOURCE_EXHAUSTED' || err.code === 429) {
+                                 detailedMessage = "AI Quota Exceeded. The shared system key is at its limit. Please wait a few minutes or add your own Gemini API Key in Settings to continue without limits.";
+                             } else {
+                                 detailedMessage = err.message || JSON.stringify(err);
+                             }
+                         }
+                     } catch(e) {
+                         console.warn("Could not parse error response JSON", e);
+                     }
+                } else if (error.message) {
+                    detailedMessage = error.message;
+                }
+                
+                // Specific Check for typical network/auth failures
+                if (detailedMessage.includes("Failed to send a request")) {
+                    detailedMessage = "Network Connection Issue: Failed to send request to AI service. Please check your internet or try again.";
+                }
+
+                throw new Error(detailedMessage);
+            }
+            
+            if (data && data.error) {
+                // Action specific error handling
+                if (action === 'generate-image' && data.error === 'No image generated.') {
+                    throw new Error("AI Refusal: The model refused to generate an image for this prompt. Try rephrasing or simplifying your request.");
+                }
+                throw new Error(data.error);
+            }
+
+            return data;
+
+        } catch (error: any) {
+            console.warn(`Gemini invoke attempt ${4 - retries} failed for ${action}:`, error.message);
+            
+            // Do not retry on Quota or Refusal
+            if (error.message.includes("Quota") || error.message.includes("Refusal")) {
+                throw error;
+            }
+
+            retries--;
+            if (retries === 0) {
+                console.error(`Gemini Edge Function Error (${action}):`, error);
+                throw error;
+            }
+            await new Promise(resolve => setTimeout(resolve, (4 - retries) * 1000));
+        }
+    }
 };
 
-// ... base64ToUint8Array & createWavHeader ... (Helpers kept for Client-side audio processing)
+// ... base64ToUint8Array & createWavHeader (Helpers) ...
 function base64ToUint8Array(base64: string): Uint8Array {
   const binaryString = atob(base64);
   const len = binaryString.length;
@@ -100,41 +130,24 @@ export const combineAudioSegments = (audioDataUris: string[]): string => {
     return `data:audio/wav;base64,${btoa(Array.from(finalBytes).map((byte) => String.fromCharCode(byte)).join(''))}`;
 };
 
-// --- Secure Implementations ---
-
-export const getApiKey = () => {
-    // This function is deprecated for direct use but kept if needed for legacy checks
-    // The new flow uses the Edge Function
-    return ""; 
-};
+export const getApiKey = () => { return ""; };
 
 export const generateScriptContent = async (request: ScriptGenerationRequest): Promise<Record<string, string>> => {
-  // Using string literals for schema types to avoid client-side dependency on @google/genai
   const schema = { 
     type: 'OBJECT', 
-    properties: { 
-        script: { type: 'STRING' } 
-    }, 
+    properties: { script: { type: 'STRING' } }, 
     required: ["script"] 
   };
-  
   const prompt = `Topic: ${request.topic}. Tone: ${request.tone}. Write a 60s script.`;
-
-  return await invokeGemini('generate-script', {
-      prompt,
-      schema
-  });
+  return await invokeGemini('generate-script', { prompt, schema });
 };
 
 export const generateSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
   const result = await invokeGemini('generate-speech', { text, voiceName });
-  
-  // Reconstruct WAV from raw PCM returned by edge (to keep edge function light)
   const pcmBytes = base64ToUint8Array(result.audioData);
   const wavHeader = createWavHeader(pcmBytes.length, 24000, 1);
   const wavBytes = new Uint8Array(wavHeader.length + pcmBytes.length);
   wavBytes.set(wavHeader); wavBytes.set(pcmBytes, wavHeader.length);
-
   return `data:audio/wav;base64,${btoa(Array.from(wavBytes).map((byte) => String.fromCharCode(byte)).join(''))}`;
 };
 
@@ -146,17 +159,45 @@ export const analyzeProductImage = async (base64Image: string): Promise<string> 
     return result.text;
 };
 
-export const generateFashionImage = async (prompt: string): Promise<string> => {
+export const extractVisualConsistencyTokens = async (base64Image: string): Promise<string> => {
+    const result = await invokeGemini('analyze-image', {
+        imageBase64: base64Image,
+        prompt: "Analyze this image and describe the MAIN CHARACTER and SETTING in extreme detail (clothing, specific colors, facial features, lighting style). Output a comma-separated list of visual descriptors that can be used to generate this exact character in other poses."
+    });
+    return result.text;
+};
+
+export const generateFashionImage = async (prompt: string, referenceImage?: string): Promise<string> => {
     const result = await invokeGemini('generate-image', {
         prompt,
         aspectRatio: "3:4",
-        model: "gemini-2.5-flash-image"
+        model: "gemini-2.5-flash-image",
+        referenceImageBase64: referenceImage
     });
     return result.imageData;
 };
 
-// Mock/Placeholder for Veo (would also move to Edge in production)
-export const generateVeoVideo = async (prompt: string): Promise<string> => { return ""; }
+// VEO VIDEO GENERATION
+export const generateVeoVideo = async (prompt: string, imageBase64?: string, aspectRatio: string = '9:16'): Promise<string> => {
+    const result = await invokeGemini('generate-veo', {
+        prompt,
+        imageBase64,
+        aspectRatio
+    });
+    return `data:video/mp4;base64,${result.videoData}`;
+};
+
+// SORA VIDEO GENERATION (KIE.AI)
+export const generateSoraVideo = async (prompt: string, imageBase64?: string, aspectRatio: string = '9:16'): Promise<string> => {
+    const result = await invokeGemini('generate-sora', {
+        prompt,
+        imageBase64,
+        aspectRatio
+    });
+    return result.videoUrl;
+};
+
+// Deprecated Mock/Placeholder
 export const generateVeoImageToVideo = async (p: string, i: string): Promise<string> => { return ""; }
 export const generateVeoProductVideo = async (p: string, i: string[], r: any): Promise<string> => { return ""; }
 export const generateProductShotPrompts = async (i: string, u: string): Promise<string[]> => { return []; }

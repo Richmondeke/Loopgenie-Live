@@ -34,6 +34,7 @@ const App: React.FC = () => {
 
   const [currentView, setCurrentView] = useState<AppView>(AppView.TEMPLATES);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+  const [selectedProjectData, setSelectedProjectData] = useState<any | null>(null); // For restoring
   const [galleryInitialView, setGalleryInitialView] = useState<'DASHBOARD' | 'AVATAR_SELECT'>('DASHBOARD');
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -254,7 +255,25 @@ const App: React.FC = () => {
     } else {
         setGalleryInitialView('DASHBOARD');
     }
+    setSelectedProjectData(null); // Clear previous edit data
     setSelectedTemplate(template);
+    setCurrentView(AppView.TEMPLATES);
+  };
+
+  const handleEditProject = (project: Project) => {
+      // Reconstruct template from project
+      const template: Template = {
+          id: project.templateId,
+          name: project.templateName,
+          category: 'Saved',
+          thumbnailUrl: project.thumbnailUrl,
+          mode: project.type as any,
+          variables: []
+      };
+      
+      setSelectedProjectData(project.metadata);
+      setSelectedTemplate(template);
+      setCurrentView(AppView.TEMPLATES); // Go to Editor view
   };
 
   const handleGenerate = async (data: any) => {
@@ -295,7 +314,8 @@ const App: React.FC = () => {
                 status: ProjectStatus.COMPLETED,
                 createdAt: Date.now(),
                 type: data.type || 'UGC_PRODUCT',
-                cost: cost
+                cost: cost,
+                metadata: data.manifest // SAVE METADATA
             };
         } else {
             const jobId = await generateVideo(
@@ -314,7 +334,8 @@ const App: React.FC = () => {
                 status: ProjectStatus.PENDING,
                 createdAt: Date.now(),
                 type: 'AVATAR',
-                cost: cost
+                cost: cost,
+                metadata: data.manifest
             };
         }
 
@@ -382,6 +403,7 @@ const App: React.FC = () => {
                 isGenerating={isGenerating}
                 heyGenKey={heyGenKey}
                 userCredits={userCredits}
+                initialData={selectedProjectData} // Pass workflow data
             />
         );
     }
@@ -398,7 +420,11 @@ const App: React.FC = () => {
             />
         );
       case AppView.PROJECTS:
-        return <ProjectList projects={projects} onPollStatus={handleRefreshProjects} />;
+        return <ProjectList 
+            projects={projects} 
+            onPollStatus={handleRefreshProjects} 
+            onEditProject={handleEditProject} 
+        />;
       case AppView.ADMIN:
         return <AdminDashboard initialTab="OVERVIEW" />;
       case AppView.ADMIN_USERS:

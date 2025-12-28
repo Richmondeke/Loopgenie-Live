@@ -172,7 +172,7 @@ export const stitchVideoFrames = async (
   captionSettings?: CaptionSettings,
   animationStyle: 'ZOOM' | 'PAN' | 'STATIC' = 'ZOOM'
 ): Promise<string> => {
-  console.log("Starting client-side video stitching (v4 - global audio support)...");
+  console.log("Starting client-side video stitching (v5 - MP4 priority)...");
 
   return new Promise(async (resolve, reject) => {
     // 5 Minute Safety Timeout
@@ -315,13 +315,14 @@ export const stitchVideoFrames = async (
         const combinedTracks = [...canvasStream.getVideoTracks(), ...dest.stream.getAudioTracks()];
         const combinedStream = new MediaStream(combinedTracks);
         
+        // CRITICAL: PRIORITIZE MP4 FOR N8N AND SOCIAL MEDIA COMPATIBILITY
         const mimeTypes = [
+            'video/mp4', // Modern Chrome, Safari 14.1+ (H.264/AAC)
+            'video/webm;codecs=h264,opus', // Try H.264 container variant if native MP4 fails
             'video/webm;codecs=vp9,opus',
-            'video/webm;codecs=vp8,opus',
-            'video/webm',
-            'video/mp4' 
+            'video/webm'
         ];
-        const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
+        const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
 
         const recorder = new MediaRecorder(combinedStream, {
             mimeType: selectedMime,
@@ -335,7 +336,7 @@ export const stitchVideoFrames = async (
 
         recorder.onstop = () => {
             clearTimeout(timeoutId);
-            const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
+            const blob = new Blob(chunks, { type: selectedMime });
             const url = URL.createObjectURL(blob);
             if (audioContext && audioContext.state !== 'closed') audioContext.close();
             resolve(url);
@@ -471,15 +472,21 @@ export const concatenateVideos = async (
             if (dest) tracks.push(...dest.stream.getAudioTracks());
             
             const combinedStream = new MediaStream(tracks);
+            
+            // Priority MP4
+            const mimeTypes = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+
             const recorder = new MediaRecorder(combinedStream, {
-                videoBitsPerSecond: 3500000 // 3.5 Mbps
+                mimeType: selectedMime,
+                videoBitsPerSecond: 3500000
             });
             
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
                  clearTimeout(timeoutId);
-                 const blob = new Blob(chunks, { type: 'video/webm' });
+                 const blob = new Blob(chunks, { type: selectedMime });
                  resolve(URL.createObjectURL(blob));
                  if (audioContext) audioContext.close();
             };
@@ -553,11 +560,14 @@ export const cropVideo = async (videoUrl: string, targetW: number, targetH: numb
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
             const combined = new MediaStream(tracks);
             
-            const recorder = new MediaRecorder(combined);
+            const mimeTypes = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+
+            const recorder = new MediaRecorder(combined, { mimeType: selectedMime });
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => chunks.push(e.data);
             recorder.onstop = () => {
-                const blob = new Blob(chunks, {type:'video/webm'});
+                const blob = new Blob(chunks, {type: selectedMime });
                 resolve(URL.createObjectURL(blob));
                 actx.close();
             };
@@ -608,11 +618,14 @@ export const mergeVideoAudio = async (videoUrl: string, audioUrl: string): Promi
             const tracks = [...stream.getVideoTracks(), ...dest.stream.getAudioTracks()];
             const combinedStream = new MediaStream(tracks);
 
-            const recorder = new MediaRecorder(combinedStream);
+            const mimeTypes = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+            const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+
+            const recorder = new MediaRecorder(combinedStream, { mimeType: selectedMime });
             const chunks: Blob[] = [];
             recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
+                const blob = new Blob(chunks, { type: selectedMime });
                 resolve(URL.createObjectURL(blob));
                 audioContext.close();
             };

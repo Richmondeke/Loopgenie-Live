@@ -6,31 +6,36 @@ export const generatePollinationsImage = async (prompt: string, width: number, h
     // Pollinations URL structure
     const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${finalSeed}&nologo=true&model=flux`;
     
-    try {
-        // We fetch the image to convert it to a Base64 Data URI.
-        // This ensures consistent handling in the frontend (Editor preview) and FFMPEG service.
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), 60000); // Increased to 60s timeout
+    let retries = 3;
+    while (retries > 0) {
+        try {
+            // We fetch the image to convert it to a Base64 Data URI.
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(id);
-        
-        if (!response.ok) throw new Error("Pollinations API request failed");
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(id);
+            
+            if (!response.ok) throw new Error(`Pollinations API request failed: ${response.status}`);
 
-        const blob = await response.blob();
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
-    } catch (error: any) {
-        console.error("Pollinations generation failed:", error);
-        // Return a placeholder or bubble error depending on strictness
-        // For robustness, we throw so the caller knows this frame failed
-        if (error.name === 'AbortError') {
-             throw new Error("Image generation timed out.");
+            const blob = await response.blob();
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        } catch (error: any) {
+            console.warn(`Pollinations generation attempt ${4 - retries} failed:`, error);
+            retries--;
+            if (retries === 0) {
+                if (error.name === 'AbortError') {
+                     throw new Error("Image generation timed out.");
+                }
+                throw error;
+            }
+            await new Promise(r => setTimeout(r, 1500));
         }
-        throw error;
     }
+    throw new Error("Pollinations generation failed after retries.");
 };

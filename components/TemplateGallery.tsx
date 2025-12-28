@@ -175,6 +175,17 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
   // --- MARKETING TOOLS CONFIGURATION ---
   const MARKETING_TOOLS = [
     {
+        id: 'video_storybook',
+        title: 'Video Storybook',
+        desc: 'AI-Generated Stories with Veo 3 Scenes',
+        icon: <BookOpen size={24} />,
+        color: 'bg-blue-600',
+        bg: 'bg-blue-50 dark:bg-blue-900/10',
+        text: 'text-blue-600',
+        isHot: true,
+        onClick: () => onSelectTemplate({ id: 'storybook', name: 'Video Storybook', thumbnailUrl: '', variables: [], mode: 'STORYBOOK', category: 'AI' })
+    },
+    {
         id: 'shorts_maker',
         title: 'Shorts Maker',
         desc: 'Viral Vertical Videos',
@@ -182,7 +193,6 @@ export const TemplateGallery: React.FC<TemplateGalleryProps> = ({ onSelectTempla
         color: 'bg-rose-500',
         bg: 'bg-rose-50 dark:bg-rose-900/10',
         text: 'text-rose-500',
-        isHot: true,
         onClick: () => onSelectTemplate({ id: 'shorts', name: 'Shorts Maker', thumbnailUrl: '', variables: [], mode: 'SHORTS', category: 'AI' })
     },
     {

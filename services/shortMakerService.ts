@@ -1,16 +1,49 @@
 
-import { invokeGemini } from "./geminiService";
+import { invokeGemini, generateVeoVideo, generateSoraVideo } from "./geminiService";
 import { ShortMakerManifest, ShortMakerScene } from "../types";
 import { stitchVideoFrames, concatenateVideos, AdvancedScene } from "./ffmpegService";
-import { generateSpeech, combineAudioSegments } from "./geminiService";
+import { generateSpeech } from "./geminiService";
 import { generatePollinationsImage } from "./pollinationsService";
 import { searchPexels } from "./mockAssetService";
+
+// Re-export for consumption in components
+export { generateSoraVideo };
+
+// Helper: Convert URL to Base64 if needed
+const urlToBase64 = async (url: string): Promise<string | undefined> => {
+    if (!url) return undefined;
+    if (url.startsWith('data:')) return url;
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = () => resolve(undefined);
+            reader.readAsDataURL(blob);
+        });
+    } catch(e) {
+        console.warn("Failed to convert image to base64 for reference:", e);
+        return undefined;
+    }
+};
+
+// Helper: Clean Markdown Code Blocks from JSON String
+const cleanJson = (text: string) => {
+  if (!text) return "";
+  let clean = text.trim();
+  if (clean.startsWith('```')) {
+      clean = clean.replace(/^```(json)?\s*/i, '');
+      clean = clean.replace(/\s*```$/, '');
+  }
+  return clean;
+};
 
 // ==========================================
 // 0. BACKGROUND JOB STORE (Singleton)
 // ==========================================
 
-export type JobStatus = 'IDLE' | 'SCRIPTING' | 'VISUALIZING' | 'NARRATING' | 'ASSEMBLING' | 'COMPLETED' | 'FAILED';
+export type JobStatus = 'IDLE' | 'SCRIPTING' | 'VISUALIZING' | 'ANIMATING' | 'NARRATING' | 'ASSEMBLING' | 'COMPLETED' | 'FAILED';
 
 class ShortMakerJobStore {
     manifest: ShortMakerManifest | null = null;
@@ -60,7 +93,7 @@ class ShortMakerJobStore {
 export const jobStore = new ShortMakerJobStore();
 
 // ==========================================
-// 1. GENERATE STORY (Gemini Via Edge)
+// 1. GENERATE STORY
 // ==========================================
 
 export interface GenerateStoryRequest {
@@ -86,7 +119,6 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Prom
     ]);
 };
 
-// Helper to calculate total scenes needed based on duration
 const getTargetSceneCount = (duration: string): number => {
     const map: Record<string, number> = { 
         '15s': 3, '30s': 6, '60s': 12, 
@@ -110,443 +142,281 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
   const targetResolution = resolveResolution(req.aspectRatio || (req.mode === 'STORYBOOK' ? '16:9' : '9:16'));
   
   jobStore.update({ status: 'SCRIPTING', totalImages: targetScenesTotal });
-  jobStore.addLog(`Starting script generation for ${targetScenesTotal} scenes...`);
-
-  // For short videos, we can do it in one go
-  if (targetScenesTotal <= 15) {
-      let attempts = 0;
-      while(attempts < 3) {
-          try {
-              const result = await generateStoryBatch(req, targetScenesTotal, 1);
-              // Check for empty scenes
-              if (!result.scenes || result.scenes.length === 0) {
-                  throw new Error("AI returned an empty script.");
-              }
-              // Fix numbering just in case
-              result.scenes = result.scenes.map((s, i) => ({...s, scene_number: i + 1}));
-              // Ensure resolution is set correctly in result if LLM didn't (or we force it)
-              result.output_settings = {
-                  ...(result.output_settings || {}),
-                  video_resolution: targetResolution,
-                  fps: 30,
-                  scene_duration_default: 5,
-                  captions: { enabled: true, style: 'BOXED' },
-                  animation: 'ZOOM' // Default
-              };
-              
-              jobStore.update({ manifest: result });
-              return result;
-          } catch(e: any) {
-              // FATAL ERROR CHECK
-              const msg = (e.message || JSON.stringify(e)).toLowerCase();
-              if (msg.includes("referer") || msg.includes("referrer")) {
-                  const errorMsg = "API Key Configuration Error: Your Google API Key has 'HTTP Referrer' restrictions. Edge Functions cannot provide a referrer. Please go to Google Cloud Console and remove the restriction (set to None).";
-                  jobStore.addLog(`❌ ${errorMsg}`);
-                  throw new Error(errorMsg);
-              }
-              if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
-                  jobStore.addLog(`❌ Fatal Error: ${e.message}`);
-                  throw e; // Do not retry fatal errors
-              }
-
-              attempts++;
-              console.warn(`Single batch attempt ${attempts} failed`, e);
-              jobStore.addLog(`Script gen attempt ${attempts} failed. Retrying...`);
-              if(attempts >= 3) throw e;
-              await new Promise(r => setTimeout(r, 2000));
-          }
-      }
-      throw new Error("Failed to generate story after retries");
-  }
-
-  // For long videos (5m+), we generate in chunks
-  let allScenes: ShortMakerScene[] = [];
-  const batchSize = 5; 
-  const batches = Math.ceil(targetScenesTotal / batchSize);
   
-  // Base Manifest Structure
-  let baseManifest: ShortMakerManifest = {
-      title: "Generating...",
-      final_caption: "",
-      voice_instruction: { voice: "Fenrir", lang: "en", tone: "standard" },
-      output_settings: { 
-          video_resolution: targetResolution, 
-          fps: 30, 
-          scene_duration_default: 5,
-          captions: { enabled: true, style: 'BOXED' },
-          animation: 'ZOOM'
-      },
-      scenes: []
-  };
-
-  for (let i = 0; i < batches; i++) {
-      const startScene = (i * batchSize) + 1;
-      const count = Math.min(batchSize, targetScenesTotal - allScenes.length);
-      
-      const context = i === 0 
-        ? `This is the START of the video.` 
-        : `CONTINUATION. Previous scene ended with: "${allScenes[allScenes.length-1]?.narration_text || ''}". Keep the story flowing.`;
-      
-      let batchSuccess = false;
-      let batchAttempts = 0;
-
-      while(!batchSuccess && batchAttempts < 5) {
-        try {
-            jobStore.addLog(`Writing Batch ${i+1}/${batches}...`);
-            const batchManifest = await generateStoryBatch(req, count, startScene, context);
-            
-            if (!batchManifest.scenes) batchManifest.scenes = [];
-
-            if (i === 0) {
-                // Initialize Base Manifest with strict resolution control
-                baseManifest = { 
-                    ...batchManifest, 
-                    scenes: [],
-                    output_settings: {
-                        ...(batchManifest.output_settings || {}),
-                        video_resolution: targetResolution, // STRICT FORCE
-                        fps: 30,
-                        scene_duration_default: 5,
-                        captions: { enabled: true, style: 'BOXED' },
-                        animation: 'ZOOM'
-                    }
-                };
-            }
-            
-            // Normalize numbering
-            const normalizedScenes = batchManifest.scenes.map((s, idx) => ({
-                ...s,
-                scene_number: allScenes.length + idx + 1
-            }));
-
-            allScenes = [...allScenes, ...normalizedScenes];
-            
-            // Update Store for Live View
-            jobStore.update({
-                manifest: {
-                    ...baseManifest,
-                    scenes: allScenes
-                }
-            });
-
-            batchSuccess = true;
-            
-            // TIMED BREAK: Cooling off
-            jobStore.addLog(`Cooling down (3s)...`);
-            await new Promise(r => setTimeout(r, 3000));
-
-        } catch (e: any) {
-            // FATAL ERROR CHECK
-            const msg = (e.message || JSON.stringify(e)).toLowerCase();
-            
-            if (msg.includes("referer") || msg.includes("referrer")) {
-                  const errorMsg = "API Key Configuration Error: Your Google API Key has 'HTTP Referrer' restrictions. Please go to Google Cloud Console and set restrictions to 'None'.";
-                  jobStore.addLog(`❌ ${errorMsg}`);
-                  throw new Error(errorMsg);
-            }
-
-            if (msg.includes("api key") || msg.includes("quota") || msg.includes("permission") || msg.includes("403") || msg.includes("401")) {
-                jobStore.addLog(`❌ Fatal Error: ${e.message}`);
-                throw e; // Break completely out of loop
-            }
-
-            batchAttempts++;
-            console.error(`Batch ${i+1} attempt ${batchAttempts} failed`, e);
-            if (batchAttempts < 5) {
-                 jobStore.addLog(`Batch ${i+1} failed, retrying in 3s...`);
-                 await new Promise(r => setTimeout(r, 3000 * batchAttempts));
-            }
-        }
-      }
-
-      if (!batchSuccess) {
-          jobStore.addLog(`Error: Batch ${i+1} failed permanently.`);
-          break; 
-      }
-  }
+  const manifest = await generateStoryBatch(req, targetScenesTotal, 1);
   
-  if (allScenes.length === 0) {
-      throw new Error("Failed to generate any scenes for the script. Please try a different idea.");
-  }
-
-  const finalManifest = {
-      ...baseManifest,
-      scenes: allScenes,
-      status: "story_ready" as const,
-      seed: req.seed || Math.random().toString(36).substring(7),
-      idea_input: req.idea
-  };
+  manifest.scenes = manifest.scenes.map((s, i) => ({...s, scene_number: i + 1}));
+  manifest.output_settings = { ...manifest.output_settings, video_resolution: targetResolution };
   
-  jobStore.update({ manifest: finalManifest });
-  return finalManifest;
+  jobStore.update({ manifest });
+  return manifest;
 };
 
-// Internal function to generate a specific batch of scenes via Edge Function
 const generateStoryBatch = async (
     req: GenerateStoryRequest, 
     count: number, 
     startSceneNumber: number,
     contextInfo: string = ""
 ): Promise<ShortMakerManifest> => {
-
   const ratioText = req.aspectRatio || (req.mode === 'STORYBOOK' ? "16:9" : "9:16");
-  const ideaClean = (req.idea || '').substring(0, 500).replace(/"/g, "'").replace(/\n/g, " ");
-  
-  const styleInstruction = req.scriptStyle ? 
-    `STYLE: "${req.scriptStyle}". Must adhere to this tone strictly.` : 
-    "STYLE: Engaging and Viral.";
-
   const systemInstruction = `
-SYSTEM: You are a professional video content strategist. Output **ONLY** valid JSON. No markdown, no pre-amble.
-
-OBJECTIVE: Create a script for a video.
-${styleInstruction}
-
-CRITICAL RULES:
-1. Pacing: Narration max 25 words per scene.
-2. Visuals: Vivid descriptions for AI image gen.
-3. Consistency: Use 'character_tokens' for recurring characters.
-4. Output exactly ${count} scenes, starting from Scene #${startSceneNumber}.
-5. ${contextInfo}
-
-JSON SCHEMA:
-{
-  "title": "String (Max 6 words)",
-  "final_caption": "String (Max 8 words)",
-  "voice_instruction": { "voice": "String", "lang": "String", "tone": "String" },
-  "output_settings": { "video_resolution": "String", "fps": "Number", "scene_duration_default": "Number" },
-  "scenes": [
-    {
-      "scene_number": "Number (Must start at ${startSceneNumber})",
-      "narration_text": "String",
-      "visual_description": "String",
-      "character_tokens": ["String"],
-      "environment_tokens": ["String"],
-      "image_prompt": "String",
-      "timecodes": { "start_second": "Number", "end_second": "Number" }
-    }
-  ]
-}
+SYSTEM: Professional video content strategist. Output **ONLY** valid JSON.
+OBJECTIVE: Create a video script with exactly ${count} scenes.
+RULES:
+1. Max 25 words per scene.
+2. Vivid visual descriptions for image generation.
+3. 'camera_directive': Short, specific motion instruction for the camera (e.g., "Pan Right", "Slow Zoom In", "Orbit", "Static").
+4. Use 'character_tokens' for consistency.
+5. IMPORTANT: You MUST generate exactly ${count} distinct scenes. Do not stop early.
+JSON SCHEMA: { "title": "String", "voice_instruction": {}, "scenes": [ { "scene_number": "Number", "narration_text": "String", "image_prompt": "String", "camera_directive": "String", "visual_description": "String", "character_tokens": ["String"], "environment_tokens": ["String"] } ] }
 `;
-
-  const userPrompt = `
-Idea: "${ideaClean}"
-Mode: "${req.mode || 'SHORTS'}"
-VisualTone: "${req.style_tone || ''}"
-AspectRatio: "${ratioText}"
-  `;
-
+  const response = await withTimeout(
+      invokeGemini('generate-story-batch', {
+          model: "gemini-3-flash-preview",
+          contents: `Create a script for a video. Topic/Idea: ${req.idea}. Mode: ${req.mode}. Aspect Ratio: ${ratioText}. REQUIRED: Generate exactly ${count} scenes.`,
+          config: { systemInstruction, temperature: 0.4 }
+      }), 
+      90000, "Script timeout"
+  );
+  
+  // Clean potentially markdown-wrapped JSON
+  const jsonStr = cleanJson(response.text);
+  
   try {
-    const response = await withTimeout(
-        invokeGemini('generate-story-batch', {
-            model: "gemini-2.5-flash",
-            contents: userPrompt,
-            config: {
-                systemInstruction: systemInstruction,
-                temperature: 0.4,
-            }
-        }), 
-        90000, 
-        "Script generation timed out."
-    );
-
-    let text = response.text || "";
-    
-    // Robust cleaning for JSON
-    if (text.includes("```json")) {
-        text = text.split("```json")[1].split("```")[0];
-    } else if (text.includes("```")) {
-        text = text.split("```")[1].split("```")[0];
-    }
-    text = text.trim();
-
-    if (!text) throw new Error("Empty response from Gemini");
-    
-    return JSON.parse(text) as ShortMakerManifest;
-
-  } catch (error: any) {
-    console.error("generateStoryBatch Error:", error);
-    
-    if (error.message?.includes('Missing GEMINI_API secret')) {
-        throw new Error("Missing API Key. Please add your Google Gemini API Key in the Settings page to continue.");
-    }
-    if (error.status === 429) throw new Error("Daily AI quota exceeded (Story Generation).");
-    if (error.status === 403 || error.message?.includes('PERMISSION_DENIED')) throw new Error("API Key Error: Permission Denied.");
-    
-    throw error;
+      const parsed = JSON.parse(jsonStr) as ShortMakerManifest;
+      // Safety check: if result has fewer scenes than requested, try to pad/duplicate or just accept.
+      if (parsed.scenes && parsed.scenes.length < count) {
+          console.warn(`AI generated ${parsed.scenes.length} scenes, requested ${count}.`);
+      }
+      return parsed;
+  } catch (e) {
+      console.error("Failed to parse script JSON:", jsonStr);
+      throw new Error("AI returned invalid script format. Please retry.");
   }
 };
+
+// ==========================================
+// 2. IMAGE GENERATION
+// ==========================================
 
 export const generateSceneImage = async (
     scene: ShortMakerScene, 
     globalSeed: string, 
     styleTone?: string,
     aspectRatio: string = '9:16',
-    model: 'nano_banana' | 'flux' | 'gemini_pro' = 'nano_banana',
-    source: 'AI' | 'PEXELS' = 'AI'
+    model: 'nano_banana' | 'flux' | 'gemini_pro' | 'veo' | 'sora' = 'nano_banana',
+    source: 'AI' | 'PEXELS' = 'AI',
+    anchorImageUrl?: string 
 ): Promise<string> => {
     
     const style = styleTone || 'Cinematic';
-    const characterAnchor = scene.character_tokens.length > 0 ? `Consistent character features: ${scene.character_tokens.join(', ')}` : '';
-    const envAnchor = scene.environment_tokens.length > 0 ? `in ${scene.environment_tokens.join(', ')}` : '';
-
-    // FAILSAFE: Ensure prompt is not empty or malformed
+    
     let basePrompt = scene.image_prompt;
     if (!basePrompt || basePrompt.trim().length < 5) {
         basePrompt = scene.visual_description || scene.narration_text || "A cinematic scene";
     }
     
-    // PEXELS PATH
+    // SAFETY SANITIZATION
+    basePrompt = basePrompt.replace(/['"]/g, ''); 
+    
     if (source === 'PEXELS') {
         try {
-            // Simplify prompt for Pexels search (remove robust modifiers)
             const searchTerms = basePrompt.split(',')[0].substring(0, 100); 
             const results = await searchPexels(searchTerms);
-            if (results && results.length > 0) {
-                // Randomly pick one of the top 3 to add variety if regenerating
-                const pick = results[Math.floor(Math.random() * Math.min(3, results.length))];
-                return pick.fullUrl;
-            }
-            console.warn("Pexels found no results, falling back to AI.");
-        } catch(e) {
-            console.warn("Pexels failed, falling back to AI", e);
+            if (results && results.length > 0) return results[0].fullUrl;
+        } catch(e) {}
+    }
+
+    if (basePrompt.length > 1000) basePrompt = basePrompt.substring(0, 1000);
+    
+    let tokens = scene.character_tokens?.join(', ') || '';
+    if (tokens.length > 100) tokens = tokens.substring(0, 100);
+
+    // CRITICAL: Inject orientation specific framing to prevent "landscape squeezes"
+    const orientationFraming = aspectRatio === '9:16' 
+        ? "Vertical portrait orientation, mobile-first vertical composition, vertical framing, shot for mobile phone screens."
+        : aspectRatio === '16:9'
+            ? "Landscape widescreen orientation, 16:9 cinematic framing, horizontal composition."
+            : "";
+
+    let fullPrompt = `${style} style. ${orientationFraming} ${basePrompt}`;
+    if (tokens) {
+        fullPrompt += `. Character visual features: ${tokens}`;
+    }
+
+    // Helper to call Gemini Image Gen
+    const callGeminiImage = async (modelName: string) => {
+        let referenceBase64: string | undefined = undefined;
+        let effectivePrompt = fullPrompt;
+
+        if (anchorImageUrl) {
+            referenceBase64 = await urlToBase64(anchorImageUrl);
+            
+            // STRONG INSTRUCTION for Reference Image Separation
+            // We want the character from the image, but the scene from the prompt.
+            // Updated to include the orientation framing to ensure consistency in framing too.
+            effectivePrompt = `STORYBOARD GENERATION.
+${orientationFraming}
+TARGET SCENE: ${basePrompt}.
+REFERENCE IDENTITY: The attached image shows the MAIN CHARACTER.
+INSTRUCTION:
+1. IF the Target Scene describes the Main Character, preserve their facial features, hair, and clothing from the reference.
+2. IF the Target Scene describes a DIFFERENT character (e.g., an antagonist, a crowd, a specific named person who is NOT the main character), DO NOT apply the reference identity to them.
+3. ADAPT the composition, lighting, and pose to the Target Scene description perfectly.
+Style: ${style}.`;
         }
-    }
 
-    // AI GENERATION PATH
-    if (basePrompt.length > 1500) basePrompt = basePrompt.substring(0, 1500);
-
-    let fullPrompt = `(${style} style), ${basePrompt}, ${characterAnchor}, ${envAnchor}`;
-
-    if (style.toLowerCase().includes('photo') || style.toLowerCase().includes('cinematic')) {
-        fullPrompt += `, photorealistic, 8k uhd, cinematic lighting, sharp focus, masterpiece`;
-    } else if (style.toLowerCase().includes('anime')) {
-        fullPrompt += `, anime art, high quality, vibrant colors, detailed`;
-    } else {
-        fullPrompt += `, masterpiece, best quality, ultra-detailed`;
-    }
-
-    if (model === 'flux') {
-        let width = 720; let height = 1280;
-        if (aspectRatio === '16:9') { width = 1280; height = 720; }
-        if (aspectRatio === '1:1') { width = 1024; height = 1024; }
-        if (aspectRatio === '4:3') { width = 1024; height = 768; }
-        
-        const sceneSeed = globalSeed + scene.scene_number; 
-        return await generatePollinationsImage(fullPrompt, width, height, sceneSeed);
-    }
-
-    const geminiModelName = model === 'gemini_pro' ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-
-    try {
         const result = await invokeGemini('generate-image', {
-            model: geminiModelName,
-            prompt: fullPrompt,
-            aspectRatio: aspectRatio
+            model: modelName,
+            prompt: effectivePrompt,
+            aspectRatio: aspectRatio,
+            referenceImageBase64: referenceBase64
         });
         return result.imageData;
+    };
 
-    } catch (e: any) {
-        console.error(`Gemini Image Gen Error (${model}):`, e);
-        
-        const msg = (e.message || JSON.stringify(e)).toLowerCase();
-        if (msg.includes("referer") || msg.includes("referrer")) {
-             throw new Error("API Key Configuration Error: 'HTTP Referrer' restrictions detected. Remove restrictions in Google Cloud Console.");
-        }
+    // Helper to call Flux
+    const callFlux = async () => {
+        const width = aspectRatio === '16:9' ? 1280 : 720;
+        const height = aspectRatio === '16:9' ? 720 : 1280;
+        return await generatePollinationsImage(fullPrompt, width, height, globalSeed + scene.scene_number);
+    };
 
-        if (e.status === 429) throw new Error("Daily AI quota exceeded (Image Generation).");
-        if (e.status === 403 || e.message?.includes('PERMISSION_DENIED')) {
-            throw new Error("PERMISSION_DENIED");
+    // VEO / PRO / SORA WORKFLOW: Pro -> Flash -> Flux
+    // For Sora/Veo mode in the editor, we still need static frames first, so we use high-quality image generation.
+    if (model === 'veo' || model === 'gemini_pro' || model === 'sora') {
+        try {
+            // 1. Try Gemini 3 Pro (High Quality)
+            return await callGeminiImage('gemini-3-pro-image-preview');
+        } catch (e: any) {
+            console.warn("Gemini 3 Pro failed, trying Flash...", e.message);
+            try {
+                // 2. Fallback to Gemini 2.5 Flash
+                return await callGeminiImage('gemini-2.5-flash-image');
+            } catch (e2: any) {
+                console.warn("Gemini Flash failed, trying Flux...", e2.message);
+                // 3. Fallback to Flux
+                return await callFlux();
+            }
         }
-        throw e;
+    } 
+    
+    // NANO BANANA WORKFLOW: Flash -> Flux
+    else if (model === 'nano_banana') {
+        try {
+            return await callGeminiImage('gemini-2.5-flash-image');
+        } catch (e: any) {
+            console.warn("Gemini Flash failed, falling back to Flux...", e.message);
+            return await callFlux();
+        }
+    } 
+    
+    // FLUX DIRECT
+    else {
+        return await callFlux();
     }
 };
+
+// ==========================================
+// 3. ANIMATION (VEO)
+// ==========================================
+
+export const animateSceneWithVeo = async (
+    imageUrl: string | undefined, // Made optional for T2V fallback 
+    prompt: string, 
+    aspectRatio: string = '9:16'
+): Promise<string> => {
+    let imageBase64: string | undefined = undefined;
+    
+    if (imageUrl) {
+        try {
+            imageBase64 = await urlToBase64(imageUrl);
+        } catch (e) {
+            console.warn("Failed to process image for Veo animation, attempting Text-to-Video fallback.");
+        }
+    }
+
+    // If imageBase64 is undefined, generateVeoVideo will use Text-to-Video mode automatically
+    const videoDataUrl = await generateVeoVideo(prompt, imageBase64, aspectRatio);
+    return videoDataUrl;
+};
+
+// ==========================================
+// 4. AUDIO & ASSEMBLY
+// ==========================================
 
 export const synthesizeAudio = async (
     manifest: ShortMakerManifest, 
     elevenApiKey?: string,
     preferredVoice: string = "Fenrir"
 ): Promise<ShortMakerManifest> => {
-    // Generate ONE single long voiceover file to ensure smoothness
     jobStore.update({ status: 'NARRATING' });
-    jobStore.addLog(`Synthesizing full voiceover (${preferredVoice})...`);
-
-    const fullScript = manifest.scenes
-        .map(s => s.narration_text)
-        .filter(t => !!t)
-        .join(" "); // Join with space for natural flow
+    const fullScript = manifest.scenes.map(s => s.narration_text).filter(t => !!t).join(" ");
     
-    if (!fullScript.trim()) {
-        jobStore.addLog("No narration text found.");
-        return manifest;
-    }
+    if (!fullScript.trim()) return manifest;
 
     try {
-        // Generate single audio file
         const audioUrl = await generateSpeech(fullScript, preferredVoice);
-        
-        // Remove individual audio URLs from scenes to force global audio usage in assembly
-        const updatedScenes = manifest.scenes.map(s => ({
-            ...s,
-            generated_audio_url: undefined // Clear individual clips if they existed
-        }));
-
         const updatedManifest = {
             ...manifest,
-            scenes: updatedScenes,
+            scenes: manifest.scenes.map(s => ({ ...s, generated_audio_url: undefined })),
             generated_audio_url: audioUrl
         };
-
         jobStore.update({ manifest: updatedManifest });
         return updatedManifest;
-
     } catch (e: any) {
-        console.error("Global TTS Failed", e);
-        jobStore.addLog(`❌ TTS Failed: ${e.message}`);
         throw e;
     }
 };
 
 export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusicUrl?: string): Promise<string> => {
-    // Filter scenes that have at least an image
-    const scenes: AdvancedScene[] = manifest.scenes
-        .filter(s => !!s.generated_image_url && !s.generated_image_url.includes('placeholder'))
-        .map(s => ({
-            imageUrl: s.generated_image_url as string,
-            text: s.narration_text || "",
-            audioUrl: s.generated_audio_url // Likely undefined if using global audio
-        }));
-
-    if (scenes.length === 0) throw new Error("No valid images generated to assemble video");
-
+    const hasVeoVideos = manifest.scenes.every(s => s.generated_video_url); 
+    
     jobStore.update({ status: 'ASSEMBLING' });
-    jobStore.addLog("Assembling final video...");
+    jobStore.addLog(hasVeoVideos ? "Concatenating Veo clips..." : "Stitching images...");
 
-    let width = 1080;
-    let height = 1920;
-    if (manifest.output_settings && manifest.output_settings.video_resolution) {
-        const [w, h] = manifest.output_settings.video_resolution.split('x').map(Number);
-        if (!isNaN(w) && !isNaN(h)) {
-            width = w;
-            height = h;
+    if (hasVeoVideos) {
+        const videoUrls = manifest.scenes
+            .filter(s => !!s.generated_video_url)
+            .map(s => s.generated_video_url as string);
+            
+        let width = 1080; let height = 1920;
+        if (manifest.output_settings?.video_resolution) {
+             const [w, h] = manifest.output_settings.video_resolution.split('x').map(Number);
+             width = w; height = h;
         }
+        
+        return await concatenateVideos(videoUrls, width, height, manifest.generated_audio_url || backgroundMusicUrl);
+
+    } else {
+        // Fallback: If not all videos are present, stitch the images instead
+        const scenes: AdvancedScene[] = manifest.scenes
+            .filter(s => !!s.generated_image_url)
+            .map(s => ({
+                imageUrl: s.generated_image_url as string,
+                text: s.narration_text || "",
+            }));
+
+        if (scenes.length === 0) throw new Error("No assets to assemble");
+
+        let width = 1080; let height = 1920;
+        if (manifest.output_settings?.video_resolution) {
+            const [w, h] = manifest.output_settings.video_resolution.split('x').map(Number);
+            width = w; height = h;
+        }
+
+        const captionSettings = manifest.output_settings.captions || { enabled: true, style: 'BOXED' };
+        const animationStyle = manifest.output_settings.animation || 'ZOOM';
+
+        return await stitchVideoFrames(
+            scenes, 
+            manifest.generated_audio_url, 
+            5000, 
+            width, 
+            height, 
+            backgroundMusicUrl,
+            captionSettings,
+            animationStyle
+        );
     }
-
-    const captionSettings = manifest.output_settings.captions || { enabled: true, style: 'BOXED' };
-    const animationStyle = manifest.output_settings.animation || 'ZOOM';
-
-    // If we have a global audio generated, pass it to stitchVideoFrames
-    const globalVoiceover = manifest.generated_audio_url;
-
-    // We try to render in one go for smoothness with global audio
-    return await stitchVideoFrames(
-        scenes, 
-        globalVoiceover, 
-        5000, 
-        width, 
-        height, 
-        backgroundMusicUrl,
-        captionSettings,
-        animationStyle
-    );
 };

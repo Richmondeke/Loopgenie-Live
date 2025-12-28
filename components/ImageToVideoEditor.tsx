@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { Video, Upload, Image as ImageIcon, Loader2, Download, ChevronRight, Play } from 'lucide-react';
+import { Video, Upload, Image as ImageIcon, Loader2, Download, ChevronRight, Play, Settings } from 'lucide-react';
 import { Template } from '../types';
 import { stitchVideoFrames } from '../services/ffmpegService';
+import { generateVeoVideo, generateSoraVideo } from '../services/geminiService';
 import { uploadToStorage } from '../services/storageService';
 
 interface ImageToVideoEditorProps {
@@ -12,11 +13,15 @@ interface ImageToVideoEditorProps {
     template: Template;
 }
 
+type VideoModel = 'CLIENT' | 'VEO' | 'SORA';
+
 export const ImageToVideoEditor: React.FC<ImageToVideoEditorProps> = ({ onBack, onGenerate, userCredits, template }) => {
     const [image, setImage] = useState<string | null>(null);
     const [duration, setDuration] = useState(5);
     const [isProcessing, setIsProcessing] = useState(false);
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
+    const [model, setModel] = useState<VideoModel>('CLIENT');
+    const [prompt, setPrompt] = useState('');
 
     const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -29,31 +34,45 @@ export const ImageToVideoEditor: React.FC<ImageToVideoEditorProps> = ({ onBack, 
 
     const handleGenerate = async () => {
         if (!image) return;
-        if (userCredits < 1) {
-            alert("Insufficient credits");
+        const requiredCredits = model === 'CLIENT' ? 1 : model === 'VEO' ? 5 : 8;
+        
+        if (userCredits < requiredCredits) {
+            alert(`Insufficient credits. Required: ${requiredCredits}`);
             return;
         }
 
         setIsProcessing(true);
         try {
-            // Uses Client-Side Ken Burns Effect
-            const url = await stitchVideoFrames(
-                [{ imageUrl: image, text: '' }],
-                undefined,
-                duration * 1000,
-                1080, 1920 // Vertical Default
-            );
+            let url = "";
+            let finalPrompt = prompt || "Animate this image cinematically.";
+
+            if (model === 'CLIENT') {
+                // Uses Client-Side Ken Burns Effect
+                url = await stitchVideoFrames(
+                    [{ imageUrl: image, text: '' }],
+                    undefined,
+                    duration * 1000,
+                    1080, 1920 // Vertical Default
+                );
+            } else if (model === 'VEO') {
+                // Gemini Veo
+                url = await generateVeoVideo(finalPrompt, image);
+            } else if (model === 'SORA') {
+                // Sora 2 (Kie.ai)
+                url = await generateSoraVideo(finalPrompt, image);
+            }
+
             setVideoUrl(url);
 
-            const permUrl = await uploadToStorage(url, `img2vid_${Date.now()}.webm`, 'videos');
+            const permUrl = await uploadToStorage(url, `img2vid_${Date.now()}.mp4`, 'videos');
             
             await onGenerate({
                 isDirectSave: true,
                 videoUrl: permUrl,
                 thumbnailUrl: image,
-                cost: 1,
+                cost: requiredCredits,
                 type: 'IMAGE_TO_VIDEO',
-                templateName: 'Animated Photo',
+                templateName: `Animated Photo (${model})`,
                 shouldRedirect: false
             });
 
@@ -94,12 +113,44 @@ export const ImageToVideoEditor: React.FC<ImageToVideoEditorProps> = ({ onBack, 
                     </div>
                     
                     <div>
-                         <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Duration: {duration}s</label>
-                         <input 
-                            type="range" min="3" max="10" value={duration} onChange={(e) => setDuration(Number(e.target.value))}
-                            className="w-full accent-indigo-600"
-                         />
+                        <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Animation Model</label>
+                        <div className="grid grid-cols-1 gap-2">
+                            <button onClick={() => setModel('CLIENT')} className={`text-left p-3 rounded-xl border transition-all ${model === 'CLIENT' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+                                <div className="font-bold text-sm">Basic Motion (1 Credit)</div>
+                                <div className="text-xs opacity-80">Simple zoom/pan effects. Instant.</div>
+                            </button>
+                            <button onClick={() => setModel('VEO')} className={`text-left p-3 rounded-xl border transition-all ${model === 'VEO' ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+                                <div className="font-bold text-sm">Google Veo 3 (5 Credits)</div>
+                                <div className="text-xs opacity-80">Generative AI video. High quality.</div>
+                            </button>
+                            <button onClick={() => setModel('SORA')} className={`text-left p-3 rounded-xl border transition-all ${model === 'SORA' ? 'bg-purple-600 text-white border-purple-600' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300'}`}>
+                                <div className="font-bold text-sm">Sora 2 (8 Credits)</div>
+                                <div className="text-xs opacity-80">OpenAI's latest model via Kie.ai. Best quality.</div>
+                            </button>
+                        </div>
                     </div>
+
+                    {(model === 'VEO' || model === 'SORA') && (
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                            <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Motion Prompt</label>
+                            <textarea 
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                placeholder="Describe the movement (e.g. 'The water ripples gently', 'The character blinks and smiles')"
+                                className="w-full h-24 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none resize-none"
+                            />
+                        </div>
+                    )}
+                    
+                    {model === 'CLIENT' && (
+                        <div>
+                             <label className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 block">Duration: {duration}s</label>
+                             <input 
+                                type="range" min="3" max="10" value={duration} onChange={(e) => setDuration(Number(e.target.value))}
+                                className="w-full accent-indigo-600"
+                             />
+                        </div>
+                    )}
                 </div>
 
                 <div className="p-6 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
@@ -123,7 +174,7 @@ export const ImageToVideoEditor: React.FC<ImageToVideoEditorProps> = ({ onBack, 
                     <div className="w-full max-w-md">
                         <video src={videoUrl} controls autoPlay loop className="w-full rounded-2xl shadow-2xl" />
                         <div className="flex justify-center mt-6">
-                            <a href={videoUrl} download={`anim_${Date.now()}.webm`} className="px-8 py-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl font-bold hover:shadow-lg flex items-center gap-2">
+                            <a href={videoUrl} download={`anim_${Date.now()}.mp4`} className="px-8 py-3 bg-white dark:bg-gray-800 text-gray-900 dark:text-white rounded-xl font-bold hover:shadow-lg flex items-center gap-2">
                                 <Download size={20} /> Download Video
                             </a>
                         </div>

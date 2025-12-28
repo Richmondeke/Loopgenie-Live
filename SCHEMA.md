@@ -12,6 +12,8 @@
 | `full_name` | Text | - | |
 | `credits_balance` | Integer | `5` | The number of free credits available. |
 | `is_admin` | Boolean | `false` | Set to `true` for admin users. |
+| `webhook_url` | Text | - | URL for automation dispatch |
+| `webhook_method` | Text | `'POST'` | HTTP method for webhook |
 | `created_at` | Timestamptz | `now()` | |
 | `updated_at` | Timestamptz | `now()` | |
 
@@ -23,9 +25,9 @@
 3. **Policy "Users can update own profile":**
    - Operation: UPDATE
    - Using: `auth.uid() = id`
-4. **Policy "Admins can view all profiles" (NEW):**
+4. **Policy "Admins can view all profiles":**
    - Operation: SELECT
-   - Using: `public.check_is_admin() = true` (Must use function to avoid recursion)
+   - Using: `public.check_is_admin() = true` 
 
 ---
 
@@ -36,7 +38,7 @@
 | Column | Type | Default | Notes |
 |--------|------|---------|-------|
 | `id` | Text | - | **Primary Key**. (HeyGen Job IDs are strings) |
-| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` (Required for Admin Dashboard) |
+| `user_id` | UUID | `auth.uid()` | Foreign Key to `profiles.id` |
 | `template_id` | Text | - | **Required** |
 | `template_name` | Text | - | |
 | `thumbnail_url` | Text | - | |
@@ -46,6 +48,7 @@
 | `created_at` | Int8 | - | Stores `Date.now()` timestamp |
 | `project_type` | Text | `'AVATAR'` | Values: 'AVATAR', 'UGC_PRODUCT', 'SHORTS', etc. |
 | `cost` | Integer | `1` | Credits consumed by this project |
+| `metadata` | Jsonb | - | Stores scene data and AI manifest |
 
 ### RLS Policies for Projects
 1. **Enable RLS**
@@ -58,69 +61,33 @@
 4. **Policy "Users can update own projects":**
    - Operation: UPDATE
    - Using: `auth.uid() = user_id`
-5. **Policy "Admins can view all projects" (NEW):**
+5. **Policy "Admins can view all projects":**
    - Operation: SELECT
    - Using: `public.check_is_admin() = true`
 
 ---
 
-## 3. Social Integrations Table (NEW)
-**Name:** `social_integrations`
-**Description:** Stores connected social accounts.
+## 🚨 Emergency Fix: Missing Columns (profiles.webhook_url, etc)
+**If you see errors about missing columns in the profiles table, run this:**
 
 ```sql
-CREATE TABLE IF NOT EXISTS public.social_integrations (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  platform TEXT NOT NULL,
-  username TEXT,
-  avatar_url TEXT,
-  connected BOOLEAN DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(user_id, platform) -- Prevents duplicates
-);
+-- 1. Add Webhook Columns to Profiles
+ALTER TABLE public.profiles 
+ADD COLUMN IF NOT EXISTS webhook_url TEXT,
+ADD COLUMN IF NOT EXISTS webhook_method TEXT DEFAULT 'POST';
 
-ALTER TABLE public.social_integrations ENABLE ROW LEVEL SECURITY;
+-- 2. Add Metadata Column to Projects (if missing)
+ALTER TABLE public.projects
+ADD COLUMN IF NOT EXISTS metadata JSONB;
 
--- Drop existing policy if any to avoid conflicts during testing
-DROP POLICY IF EXISTS "Users can manage their own integrations" ON public.social_integrations;
-
-CREATE POLICY "Users can manage their own integrations" 
-ON public.social_integrations FOR ALL 
-USING (auth.uid() = user_id);
+-- 3. CRITICAL: Refresh schema cache
+-- Run this if the columns exist but the app says they "cannot be found"
+NOTIFY pgrst, 'reload schema';
 ```
 
 ---
 
-## 4. Social Posts Table (NEW)
-**Name:** `social_posts`
-**Description:** Stores history of posts.
-
-```sql
-CREATE TABLE IF NOT EXISTS public.social_posts (
-  id TEXT PRIMARY KEY,
-  user_id UUID REFERENCES auth.users(id) NOT NULL,
-  content TEXT,
-  platform TEXT,
-  scheduled_at BIGINT,
-  status TEXT DEFAULT 'posted',
-  media_url TEXT,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-ALTER TABLE public.social_posts ENABLE ROW LEVEL SECURITY;
-
--- Drop existing policy if any
-DROP POLICY IF EXISTS "Users can manage their own posts" ON public.social_posts;
-
-CREATE POLICY "Users can manage their own posts" 
-ON public.social_posts FOR ALL 
-USING (auth.uid() = user_id);
-```
-
----
-
-## 5. 🚨 Emergency Fix: Missing 'cost' Column
+## 🚨 Emergency Fix: Missing 'cost' Column
 **If you get "Could not find the 'cost' column" error, run this:**
 
 ```sql
@@ -133,12 +100,11 @@ NOTIFY pgrst, 'reload schema';
 
 ---
 
-## 6. 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
+## 🚨 Emergency Fix: Infinite Recursion (Error 42P17)
 **Run this SCRIPT if you see "infinite recursion detected in policy" errors.**
 
 ```sql
 -- 1. Create a Secure Function to check Admin Status
--- This function bypasses RLS (SECURITY DEFINER) to safely check the table without looping.
 CREATE OR REPLACE FUNCTION public.check_is_admin()
 RETURNS BOOLEAN AS $$
 BEGIN
@@ -165,42 +131,4 @@ CREATE POLICY "Admins can view all projects"
 ON public.projects
 FOR SELECT
 USING ( public.check_is_admin() = true );
-```
-
----
-
-## 7. 📦 Storage Setup (Run this to fix 42710 Error)
-**Creates the storage bucket for permanent video files.**
-
-```sql
--- 1. Reset the bucket (Safe: keeps files, resets config)
-update storage.buckets
-set public = true, file_size_limit = 52428800 -- Limit to 50MB
-where id = 'assets';
-
--- If bucket doesn't exist, create it
-insert into storage.buckets (id, name, public, file_size_limit)
-values ('assets', 'assets', true, 52428800)
-on conflict (id) do update set public = true;
-
--- 2. Drop Old Policies (Clean Slate)
-drop policy if exists "Users can upload their own assets" on storage.objects;
-drop policy if exists "Public Access to Assets" on storage.objects;
-drop policy if exists "Authenticated users can upload" on storage.objects;
-drop policy if exists "Public read access" on storage.objects;
-
--- 3. Create Robust Policies
--- Allow Read: Anyone can view files (Public Bucket)
-create policy "Public read access"
-on storage.objects for select
-using ( bucket_id = 'assets' );
-
--- Allow Upload: User can only upload to folder matching their User ID
-create policy "Authenticated users can upload"
-on storage.objects for insert
-to authenticated
-with check (
-  bucket_id = 'assets' AND
-  (storage.foldername(name))[1] = auth.uid()::text
-);
 ```

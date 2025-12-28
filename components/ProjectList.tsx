@@ -1,21 +1,26 @@
 
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
-import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon } from 'lucide-react';
+import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon, Edit3, Zap, Loader2 } from 'lucide-react';
+import { dispatchProjectToWebhook } from '../services/webhookService';
+import { isSupabaseConfigured, supabase } from '../supabaseClient';
 
 interface ProjectListProps {
   projects: Project[];
   onPollStatus: () => void;
+  onEditProject?: (project: Project) => void;
 }
 
-export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus }) => {
+export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus, onEditProject }) => {
   const [selectedItem, setSelectedItem] = useState<{ url: string; name: string; type: string } | null>(null);
   const [activeCategory, setActiveCategory] = useState<'ALL' | 'STORYBOOK' | 'SHORTS' | 'AVATAR' | 'FASHION'>('ALL');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [sendingWebhookId, setSendingWebhookId] = useState<string | null>(null);
+  const [sentWebhookId, setSentWebhookId] = useState<string | null>(null);
 
   // Filter projects based on category
   const filteredProjects = projects.filter(p => {
-      if (activeCategory === 'ALL') return true; // Show everything
+      if (activeCategory === 'ALL') return true; 
       if (activeCategory === 'STORYBOOK') return p.type === 'STORYBOOK';
       if (activeCategory === 'SHORTS') return p.type === 'SHORTS' || p.type === 'UGC_PRODUCT' || p.type === 'TEXT_TO_VIDEO' || p.type === 'IMAGE_TO_VIDEO';
       if (activeCategory === 'AVATAR') return p.type === 'AVATAR' || p.type === 'AUDIOBOOK';
@@ -23,7 +28,40 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
       return false;
   });
 
-  // Status Badge Component
+  const handlePushToWebhook = async (project: Project) => {
+      setSendingWebhookId(project.id);
+      try {
+          let webhookUrl = localStorage.getItem('loopgenie_webhook_url') || '';
+          let webhookMethod = localStorage.getItem('loopgenie_webhook_method') || 'POST';
+
+          if (isSupabaseConfigured()) {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (user) {
+                  const { data } = await supabase.from('profiles').select('webhook_url, webhook_method').eq('id', user.id).single();
+                  if (data?.webhook_url) webhookUrl = data.webhook_url;
+                  if (data?.webhook_method) webhookMethod = data.webhook_method;
+              }
+          }
+
+          if (!webhookUrl) {
+              alert("No Webhook URL configured. Please set one up in the Integrations tab.");
+              return;
+          }
+
+          const result = await dispatchProjectToWebhook(webhookUrl, project, webhookMethod);
+          if (result.success) {
+              setSentWebhookId(project.id);
+              setTimeout(() => setSentWebhookId(null), 3000);
+          } else {
+              throw new Error(result.error);
+          }
+      } catch (e: any) {
+          alert("Webhook Error: " + e.message);
+      } finally {
+          setSendingWebhookId(null);
+      }
+  };
+
   const StatusBadge = ({ status }: { status: ProjectStatus }) => {
     switch (status) {
       case ProjectStatus.COMPLETED:
@@ -47,7 +85,7 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
   const handleRefresh = async () => {
       setIsRefreshing(true);
       await onPollStatus();
-      setTimeout(() => setIsRefreshing(false), 800); // Visual feedback min duration
+      setTimeout(() => setIsRefreshing(false), 800);
   };
 
   const categories = [
@@ -75,7 +113,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
           </button>
         </div>
 
-        {/* Category Tabs */}
         <div className="w-full mb-8">
             <div className="flex gap-3 overflow-x-auto pb-4 px-1 no-scrollbar snap-x">
                 {categories.map(cat => (
@@ -158,6 +195,37 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                           <div className="flex items-center gap-3 w-full sm:w-auto justify-center">
                               {project.status === ProjectStatus.COMPLETED && project.videoUrl ? (
                                 <>
+                                    {/* Webhook Dispatch Button */}
+                                    <button 
+                                        onClick={() => handlePushToWebhook(project)}
+                                        disabled={sendingWebhookId === project.id}
+                                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm border ${
+                                            sentWebhookId === project.id 
+                                            ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 text-orange-600' 
+                                            : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-orange-50 dark:hover:bg-orange-900/10 hover:border-orange-200'
+                                        }`}
+                                        title="Push to Webhook (n8n/Zapier)"
+                                    >
+                                        {sendingWebhookId === project.id ? (
+                                            <Loader2 size={16} className="animate-spin" />
+                                        ) : (
+                                            <Zap size={16} className={sentWebhookId === project.id ? 'fill-current' : ''} />
+                                        )}
+                                        <span className="hidden sm:inline">{sentWebhookId === project.id ? 'Sent' : 'Push'}</span>
+                                    </button>
+
+                                    {/* Workflow Button for Storybook/Shorts */}
+                                    {(project.type === 'STORYBOOK' || project.type === 'SHORTS') && onEditProject && project.metadata && (
+                                        <button 
+                                            onClick={() => onEditProject(project)}
+                                            className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-all shadow-sm"
+                                            title="View individual scenes and prompts"
+                                        >
+                                            <Edit3 size={16} />
+                                            <span className="hidden sm:inline">Workflow</span>
+                                        </button>
+                                    )}
+
                                     <button 
                                         onClick={(e) => handleOpenItem(e, project)}
                                         className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-50 dark:hover:bg-gray-600 transition-all shadow-sm"
@@ -173,7 +241,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                                         className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 hover:shadow-md hover:-translate-y-0.5 transition-all shadow-sm w-full sm:w-auto justify-center"
                                     >
                                         <Download size={16} />
-                                        <span className="sm:hidden">Download</span>
                                         <span className="hidden sm:inline">Download</span>
                                     </a>
                                 </>
@@ -192,11 +259,9 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
         )}
       </div>
 
-      {/* Media Viewer Modal Overlay */}
       {selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="relative w-full max-w-6xl bg-black rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[95vh] border border-gray-800">
-             {/* Header */}
              <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/90 to-transparent pointer-events-none">
                 <h3 className="text-white font-bold text-xl drop-shadow-md pointer-events-auto">{selectedItem.name}</h3>
                 <button 
@@ -207,7 +272,6 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                 </button>
              </div>
 
-             {/* Player / Viewer */}
              <div className="flex-1 bg-black flex items-center justify-center relative p-4">
                 {selectedItem.type === 'FASHION_SHOOT' ? (
                     <img 

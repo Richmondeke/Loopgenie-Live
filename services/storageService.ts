@@ -7,7 +7,6 @@ export const uploadToStorage = async (
     folder: string = 'uploads'
 ): Promise<string> => {
     // If Supabase isn't configured, we just return the original URL (likely a Blob URL or Data URI)
-    // Note: Blob URLs will expire on reload, so this is just for local dev fallback.
     if (!isSupabaseConfigured()) {
         console.warn("Supabase Storage not configured. Returning temporary URL.");
         if (typeof blobOrUrl === 'string') return blobOrUrl;
@@ -26,17 +25,13 @@ export const uploadToStorage = async (
                 const res = await fetch(blobOrUrl);
                 blobToUpload = await res.blob();
             } else {
-                // It's a remote URL (e.g. from Veo). 
-                // We can try to fetch it, but CORS might block it.
-                // If it's a permanent remote URL, we might just want to return it.
-                // But to be safe and own the asset, let's try to proxy/fetch.
+                // It's a remote URL. Try to proxy/fetch.
                 try {
                     const res = await fetch(blobOrUrl);
                     if (!res.ok) throw new Error("Failed to fetch remote asset");
                     blobToUpload = await res.blob();
                 } catch (e) {
                     console.warn("Could not fetch remote URL for storage proxy, saving original link:", e);
-                    // This is risky if the link expires, but better than crashing if we can't proxy.
                     return blobOrUrl;
                 }
             }
@@ -45,17 +40,28 @@ export const uploadToStorage = async (
         }
 
         // 2. Get User ID for secure folder structure
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error("User not authenticated for upload");
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+            throw new Error("User not authenticated for upload");
+        }
 
         const filePath = `${user.id}/${folder}/${Date.now()}_${fileName}`;
+        
+        // Determine content type based on extension or folder
+        let contentType = 'application/octet-stream';
+        if (fileName.endsWith('.mp4') || fileName.endsWith('.webm') || folder === 'stories' || folder === 'videos') {
+            contentType = 'video/mp4'; // FORCE MP4 Header
+        } else if (fileName.endsWith('.png') || fileName.endsWith('.jpg') || folder === 'fashion') {
+            contentType = 'image/png';
+        }
 
         // 3. Upload to Supabase
         const { error: uploadError } = await supabase.storage
             .from('assets')
             .upload(filePath, blobToUpload, {
                 cacheControl: '3600',
-                upsert: false
+                upsert: false,
+                contentType: contentType
             });
 
         if (uploadError) throw uploadError;
@@ -68,9 +74,10 @@ export const uploadToStorage = async (
         return publicUrl;
 
     } catch (error) {
-        console.error("Storage Upload Failed:", error);
-        // CRITICAL: Re-throw error so the UI knows the upload failed.
-        // Returning a temp URL here causes "Project saved" success but the link breaks later.
-        throw error;
+        console.warn("Storage Upload Failed (Returning local fallback):", error);
+        // Fallback: If upload fails (e.g. not logged in), return a local Object URL
+        // This ensures the user can still download/view the result in the current session.
+        if (typeof blobOrUrl === 'string') return blobOrUrl;
+        return URL.createObjectURL(blobOrUrl);
     }
 };

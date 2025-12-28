@@ -23,6 +23,8 @@ export interface UserProfile {
   full_name?: string;
   credits_balance: number;
   isAdmin?: boolean;
+  webhook_url?: string;
+  webhook_method?: string;
 }
 
 export interface TemplateVariable {
@@ -56,6 +58,7 @@ export interface Project {
   type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE'; 
   cost?: number; 
   user_email?: string;
+  metadata?: any; // Stores manifest, scenes, prompts etc.
 }
 
 export interface ClippingProject {
@@ -131,7 +134,8 @@ export interface ShortMakerScene {
   timecodes: ShortMakerTimecodes;
   generated_image_url?: string;
   generated_image_seed?: string;
-  generated_audio_url?: string; 
+  generated_audio_url?: string;
+  generated_video_url?: string; 
 }
 
 export interface ShortMakerManifest {
@@ -152,14 +156,14 @@ export interface ShortMakerManifest {
 export interface ScheduledPost {
   id: string;
   content: string;
-  platform: 'twitter' | 'linkedin' | 'instagram';
+  platform: 'twitter' | 'linkedin' | 'instagram' | 'webhook';
   scheduledAt: number; // Timestamp
   status: 'scheduled' | 'posted' | 'failed';
   mediaUrl?: string;
 }
 
 export interface IntegrationStatus {
-  id: 'twitter' | 'linkedin' | 'instagram';
+  id: 'twitter' | 'linkedin' | 'instagram' | 'webhook';
   name: string;
   connected: boolean;
   username?: string;
