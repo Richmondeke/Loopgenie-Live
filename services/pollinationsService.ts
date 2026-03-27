@@ -1,40 +1,53 @@
 
+import { FIREBASE_FUNCTION_URL } from "../constants";
+
 export const generatePollinationsImage = async (prompt: string, width: number, height: number, seed?: string): Promise<string> => {
     const finalSeed = seed || Math.floor(Math.random() * 1000000).toString();
     const encodedPrompt = encodeURIComponent(prompt);
-    
+
     // Pollinations URL structure
     const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${finalSeed}&nologo=true&model=flux`;
-    
+
     let retries = 3;
     while (retries > 0) {
         try {
-            // We fetch the image to convert it to a Base64 Data URI.
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 60000); // 60s timeout
-
-            const response = await fetch(url, { signal: controller.signal });
-            clearTimeout(id);
-            
-            if (!response.ok) throw new Error(`Pollinations API request failed: ${response.status}`);
-
-            const blob = await response.blob();
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
+            // Use Firebase Cloud Function as proxy for reliable fetch
+            const response = await fetch(FIREBASE_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'proxy-webhook',
+                    payload: {
+                        url: url,
+                        method: 'GET'
+                    }
+                })
             });
+
+            const data = await response.json();
+
+            if (!response.ok || data.error) {
+                throw new Error(data.error || `Proxy failed with status ${response.status}`);
+            }
+
+            // The proxy returns result = { success, status, contentType, details }
+            // For images, 'details' is a data URI if the proxy handled it correctly.
+            if (data.details && data.details.startsWith('data:')) {
+                return data.details;
+            } else if (data.details) {
+                // If the proxy didn't detect it as image or returned something else
+                throw new Error("Proxy did not return a valid image data URI.");
+            }
+
+            throw new Error("No data returned from proxy.");
+
         } catch (error: any) {
-            console.warn(`Pollinations generation attempt ${4 - retries} failed:`, error);
+            console.warn(`Pollinations generation attempt ${4 - retries} failed:`, error.message);
             retries--;
             if (retries === 0) {
-                if (error.name === 'AbortError') {
-                     throw new Error("Image generation timed out.");
-                }
                 throw error;
             }
-            await new Promise(r => setTimeout(r, 1500));
+            await new Promise(r => setTimeout(r, 2000));
         }
     }
     throw new Error("Pollinations generation failed after retries.");

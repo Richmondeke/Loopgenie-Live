@@ -1,5 +1,20 @@
 
-import { supabase, isSupabaseConfigured } from '../supabaseClient';
+import { db, auth, isFirebaseConfigured } from '../firebase';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+  setDoc,
+  updateDoc,
+  increment,
+  runTransaction,
+  onSnapshot
+} from 'firebase/firestore';
 import { Project, ProjectStatus } from '../types';
 import { triggerWebhook } from './webhookService';
 
@@ -8,11 +23,11 @@ let adminProjectsCache: { data: Project[], timestamp: number } | null = null;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 // --- Types ---
-const mapRowToProject = (row: any): Project => {
-  let pType = row.project_type;
+const mapRowToProject = (id: string, data: any): Project => {
+  let pType = data.project_type;
 
   if (!pType) {
-    const idStr = String(row.id || '');
+    const idStr = String(id || '');
     if (idStr.startsWith('ugc_')) pType = 'UGC_PRODUCT';
     else if (idStr.startsWith('stor_')) pType = 'STORYBOOK';
     else if (idStr.startsWith('short_')) pType = 'SHORTS';
@@ -25,336 +40,342 @@ const mapRowToProject = (row: any): Project => {
 
   // Robust date parsing
   let createdAt = Date.now();
-  
-  if (row.created_at) {
-      const asNum = Number(row.created_at);
-      if (!isNaN(asNum) && asNum > 0) {
-          createdAt = asNum;
-      } else {
-          const parsed = new Date(row.created_at).getTime();
-          if (!isNaN(parsed)) createdAt = parsed;
-      }
+
+  if (data.created_at) {
+    const asNum = Number(data.created_at);
+    if (!isNaN(asNum) && asNum > 0) {
+      createdAt = asNum;
+    } else {
+      const parsed = new Date(data.created_at).getTime();
+      if (!isNaN(parsed)) createdAt = parsed;
+    }
   }
 
   return {
-    id: row.id,
-    templateId: row.template_id || 'unknown',
-    templateName: row.template_name || 'Untitled Project',
-    thumbnailUrl: row.thumbnail_url || '',
-    status: row.status as ProjectStatus,
-    videoUrl: row.video_url,
-    error: row.error,
+    id: id,
+    templateId: data.template_id || data.templateId || 'unknown',
+    templateName: data.template_name || data.templateName || 'Untitled Project',
+    thumbnailUrl: data.thumbnail_url || data.thumbnailUrl || '',
+    status: (data.status || ProjectStatus.PENDING) as ProjectStatus,
+    videoUrl: data.video_url || data.videoUrl,
+    error: data.error,
     createdAt: createdAt,
-    type: pType as any,
-    cost: row.cost || 1, 
-    user_email: row.user_email,
-    metadata: row.metadata // Load metadata if available
+    type: (data.project_type || data.type || pType) as any,
+    cost: data.cost || 1,
+    user_email: data.user_email || data.userEmail,
+    metadata: data.metadata || data.manifest
   };
-};
-
-// --- Project Type Sanitization for DB Enum ---
-const sanitizeProjectTypeForDB = (type?: string): string => {
-  // Common types accepted by the standard Supabase Enum
-  const allowed = ['AVATAR', 'UGC_PRODUCT', 'SHORTS', 'FASHION_SHOOT', 'TEXT_TO_VIDEO', 'AUDIOBOOK', 'IMAGE_TO_VIDEO'];
-  if (!type) return 'AVATAR';
-  if (type === 'STORYBOOK') return 'SHORTS'; // Fallback mapping for DB enum
-  if (!allowed.includes(type)) return 'AVATAR';
-  return type;
 };
 
 // --- Mock/Local Implementation ---
 const PROJECT_STORAGE_KEY = 'loopgenie_projects';
+const MAX_LOCAL_PROJECTS = 20;
 
 const getLocalProjects = (): any[] => {
-  const stored = localStorage.getItem(PROJECT_STORAGE_KEY);
-  return stored ? JSON.parse(stored) : [];
+  try {
+    const stored = localStorage.getItem(PROJECT_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error("[ProjectService] Failed to read from LocalStorage:", e);
+    return [];
+  }
 };
 
 const saveLocalProjects = (projects: any[]) => {
+  // Always limit total number of local projects
+  const limited = projects.slice(0, MAX_LOCAL_PROJECTS);
+
   try {
-    // Attempt to save full list
-    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(limited));
   } catch (e) {
-    console.warn("[ProjectService] LocalStorage quota exceeded. Pruning...");
-    // Strategy: Remove 'metadata' from older projects (keep last 3 full metadata)
-    const pruned = projects.map((p, idx) => {
-        if (idx < 3) return p;
+    console.warn("[ProjectService] LocalStorage quota exceeded. Aggressive pruning...");
+
+    // Aggressive pruning: Keep metadata ONLY for the most recent project
+    const pruned = limited.map((p, idx) => {
+      if (idx === 0) return p; // Keep metadata for the very last one
+      const { metadata, ...rest } = p;
+      return rest;
+    });
+
+    try {
+      localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(pruned));
+    } catch (e2) {
+      // Last resort: Keep only the last 5 projects without metadata
+      console.error("[ProjectService] LocalStorage still full. Minimal save.");
+      const minimal = pruned.slice(0, 5).map(p => {
         const { metadata, ...rest } = p;
         return rest;
-    });
-    
-    try {
-        localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(pruned));
-    } catch (e2) {
-        // Ultimate Fallback: Just keep last 10 entries without metadata
-        localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(pruned.slice(0, 10)));
+      });
+      try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(minimal));
+      } catch (e3) {
+        console.error("[ProjectService] LocalStorage is completely unusable.");
+      }
     }
   }
 };
 
 const saveToLocalStorage = (project: Project) => {
-    const projects = getLocalProjects();
-    const index = projects.findIndex((p: any) => p.id === project.id);
-    const row = {
-      id: project.id,
-      template_id: project.templateId,
-      template_name: project.templateName,
-      thumbnail_url: project.thumbnailUrl,
-      status: project.status,
-      video_url: project.videoUrl,
-      error: project.error,
-      created_at: project.createdAt,
-      project_type: project.type,
-      cost: project.cost,
-      metadata: project.metadata
-    };
+  const projects = getLocalProjects();
+  const index = projects.findIndex((p: any) => p.id === project.id);
+  const row = {
+    id: project.id,
+    template_id: project.templateId,
+    template_name: project.templateName,
+    thumbnail_url: project.thumbnailUrl,
+    status: project.status,
+    video_url: project.videoUrl,
+    error: project.error,
+    created_at: project.createdAt,
+    project_type: project.type,
+    cost: project.cost,
+    metadata: project.metadata
+  };
 
-    if (index >= 0) {
-      projects[index] = { ...projects[index], ...row };
-    } else {
-      projects.unshift(row);
-    }
-    saveLocalProjects(projects);
+  if (index >= 0) {
+    projects[index] = { ...projects[index], ...row };
+  } else {
+    projects.unshift(row);
+  }
+  saveLocalProjects(projects);
 };
 
-/**
- * Utility to fetch the user's webhook URL from profiles.
- * Includes a graceful fallback if the column hasn't been added to the DB yet.
- */
+// --- Webhook Helper ---
 const getUserWebhookUrl = async (userId: string): Promise<string | undefined> => {
-    const localUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
-    
-    if (!isSupabaseConfigured()) {
-        return localUrl;
-    }
+  const localUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
 
-    try {
-        const { data, error } = await supabase
-            .from('profiles')
-            .select('webhook_url')
-            .eq('id', userId)
-            .single();
-        
-        // If column doesn't exist, fallback to local storage silently
-        if (error && (error.code === '42703' || error.message?.includes('webhook_url'))) {
-            return localUrl;
-        }
-        
-        return data?.webhook_url || localUrl;
-    } catch (e) {
-        return localUrl;
-    }
+  if (!isFirebaseConfigured()) {
+    return localUrl;
+  }
+
+  try {
+    const docRef = doc(db, 'profiles', userId);
+    const docSnap = await getDoc(docRef);
+    return docSnap.data()?.webhook_url || localUrl;
+  } catch (e) {
+    return localUrl;
+  }
 };
 
 // --- Service Methods ---
 
 export const fetchProjects = async (): Promise<{ projects: Project[], error?: any }> => {
-  if (!isSupabaseConfigured()) {
+  if (!isFirebaseConfigured()) {
     const localData = getLocalProjects();
-    return { projects: localData.map(mapRowToProject) };
+    return { projects: localData.map(row => mapRowToProject(row.id, row)) };
   }
 
   try {
-      // Limit to 50 recent projects to prevent timeouts/slow loading
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
+    const user = auth.currentUser;
+    if (!user) return { projects: [] };
 
-      if (error) {
-        console.warn("Supabase Error:", error);
-        // Fallback to local data on ANY error (500, Network, etc)
-        const localData = getLocalProjects();
-        
-        // Return explicit error for UI handling if it's the recursion bug
-        if (error.code === '42P17') {
-            return { projects: localData.map(mapRowToProject), error: { code: '42P17', message: "Database Policy Error." } };
-        }
-        
-        return { projects: localData.map(mapRowToProject) };
-      }
-      
-      return { projects: data.map(mapRowToProject) };
+    const q = query(
+      collection(db, 'projects'),
+      where('user_id', '==', user.uid),
+      orderBy('created_at', 'desc'),
+      limit(50)
+    );
+
+    const querySnapshot = await getDocs(q);
+    const projects: Project[] = [];
+    querySnapshot.forEach((doc) => {
+      projects.push(mapRowToProject(doc.id, doc.data()));
+    });
+
+    return { projects };
   } catch (err) {
-      console.warn("Unexpected error fetching projects:", err);
-      const localData = getLocalProjects();
-      return { projects: localData.map(mapRowToProject) };
+    console.warn("Unexpected error fetching projects:", err);
+    const localData = getLocalProjects();
+    return { projects: localData.map(row => mapRowToProject(row.id, row)) };
   }
 };
 
-// NEW: Lightweight Stats Fetcher
+export const subscribeToProjects = (callback: (projects: Project[]) => void) => {
+  if (!isFirebaseConfigured()) {
+    const localData = getLocalProjects();
+    callback(localData.map(row => mapRowToProject(row.id, row)));
+    return () => { };
+  }
+
+  const user = auth.currentUser;
+  if (!user) {
+    callback([]);
+    return () => { };
+  }
+
+  const q = query(
+    collection(db, 'projects'),
+    where('user_id', '==', user.uid),
+    orderBy('created_at', 'desc'),
+    limit(50)
+  );
+
+  return onSnapshot(q, (querySnapshot) => {
+    const projects: Project[] = [];
+    querySnapshot.forEach((doc) => {
+      projects.push(mapRowToProject(doc.id, doc.data()));
+    });
+    callback(projects);
+  }, (err) => {
+    console.warn("Project subscription error:", err);
+  });
+};
+
+export const subscribeToAllProjectsAdmin = (callback: (projects: Project[]) => void) => {
+  if (!isFirebaseConfigured()) {
+    callback(getLocalProjects().map(row => mapRowToProject(row.id, row)));
+    return () => { };
+  }
+
+  const q = query(collection(db, 'projects'), orderBy('created_at', 'desc'), limit(100));
+  return onSnapshot(q, (querySnapshot) => {
+    const projects: Project[] = [];
+    querySnapshot.forEach((doc) => {
+      projects.push(mapRowToProject(doc.id, doc.data()));
+    });
+    callback(projects);
+  }, (err) => {
+    console.warn("Admin project subscription error:", err);
+  });
+};
+
 export const fetchProjectStatsAdmin = async (): Promise<{ totalCost: number, totalFailed: number, totalCount: number, activeUsers: number }> => {
-    if (!isSupabaseConfigured()) return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
+  if (!isFirebaseConfigured()) return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
 
-    try {
-        const { data, error } = await supabase
-            .from('projects')
-            .select('cost, status, user_id');
-        
-        if (error) throw error;
+  try {
+    const querySnapshot = await getDocs(collection(db, 'projects'));
+    const data = querySnapshot.docs.map(doc => doc.data());
 
-        const totalCount = data.length;
-        const totalCost = data.reduce((acc, curr) => acc + (curr.cost || 0), 0);
-        const totalFailed = data.filter(p => p.status === 'failed').length;
-        const activeUsers = new Set(data.map(p => p.user_id)).size;
+    const totalCount = data.length;
+    const totalCost = data.reduce((acc, curr) => acc + (curr.cost || 0), 0);
+    const totalFailed = data.filter(p => p.status === 'failed').length;
+    const activeUsers = new Set(data.map(p => p.user_id)).size;
 
-        return { totalCost, totalFailed, totalCount, activeUsers };
-    } catch (e) {
-        console.warn("Failed to fetch stats:", e);
-        return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
-    }
+    return { totalCost, totalFailed, totalCount, activeUsers };
+  } catch (e) {
+    console.warn("Failed to fetch stats:", e);
+    return { totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 };
+  }
 };
 
 export const fetchAllProjectsAdmin = async (forceRefresh = false): Promise<Project[]> => {
-    if (!forceRefresh && adminProjectsCache && (Date.now() - adminProjectsCache.timestamp < CACHE_TTL)) {
-        return adminProjectsCache.data;
+  if (!forceRefresh && adminProjectsCache && (Date.now() - adminProjectsCache.timestamp < CACHE_TTL)) {
+    return adminProjectsCache.data;
+  }
+
+  if (!isFirebaseConfigured()) {
+    return getLocalProjects().map(row => mapRowToProject(row.id, row));
+  }
+
+  try {
+    const q = query(collection(db, 'projects'), orderBy('created_at', 'desc'), limit(100));
+    const querySnapshot = await getDocs(q);
+
+    const projects: Project[] = [];
+    for (const docSnapshot of querySnapshot.docs) {
+      const data = docSnapshot.data();
+      // In Firestore, we'd need a separate fetch for profiles or denormalize email
+      projects.push(mapRowToProject(docSnapshot.id, data));
     }
 
-    if (!isSupabaseConfigured()) {
-        const local = getLocalProjects().map(mapRowToProject);
-        return local;
-    }
+    adminProjectsCache = { data: projects, timestamp: Date.now() };
+    return projects;
 
-    try {
-        // Limit to 100 for admin table to ensure stability
-        const { data, error } = await supabase
-            .from('projects')
-            .select(`
-                *,
-                profiles:user_id (email)
-            `)
-            .order('created_at', { ascending: false })
-            .limit(100);
-
-        if (error) throw error;
-
-        const mapped = data.map((row: any) => ({
-            ...mapRowToProject(row),
-            user_email: row.profiles?.email
-        }));
-
-        adminProjectsCache = { data: mapped, timestamp: Date.now() };
-        return mapped;
-
-    } catch (e: any) {
-        console.warn("Fetch Admin Projects Failed (Returning Fallback):", e);
-        return [];
-    }
+  } catch (e: any) {
+    console.warn("Fetch Admin Projects Failed:", e);
+    return [];
+  }
 };
 
 export const deductCredits = async (userId: string, amount: number): Promise<number | null> => {
-    if (!isSupabaseConfigured()) return null; 
+  if (!isFirebaseConfigured()) return null;
 
-    const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('credits_balance')
-        .eq('id', userId)
-        .single();
-    
-    if (fetchError || !profile) {
-        console.error("Error fetching balance:", JSON.stringify(fetchError));
-        return null; 
-    }
+  try {
+    return await runTransaction(db, async (transaction) => {
+      const docRef = doc(db, 'profiles', userId);
+      const docSnap = await transaction.get(docRef);
 
-    if (profile.credits_balance < amount) {
-        throw new Error(`Insufficient credits.`);
-    }
+      if (!docSnap.exists()) throw new Error("Profile not found.");
 
-    const newBalance = profile.credits_balance - amount;
+      const currentBalance = docSnap.data().credits_balance ?? 0;
+      if (currentBalance < amount) throw new Error("Insufficient credits.");
 
-    const { data: updatedProfile, error: updateError } = await supabase
-        .from('profiles')
-        .update({ credits_balance: newBalance })
-        .eq('id', userId)
-        .select('credits_balance')
-        .single();
-
-    if (updateError) throw new Error("Failed to deduct credits.");
-    
-    return updatedProfile.credits_balance;
+      const newBalance = currentBalance - amount;
+      transaction.update(docRef, { credits_balance: newBalance });
+      return newBalance;
+    });
+  } catch (e) {
+    console.error("Error deducting credits:", e);
+    return null;
+  }
 };
 
 export const refundCredits = async (userId: string, amount: number): Promise<number | null> => {
-    return addCredits(userId, amount);
+  return addCredits(userId, amount);
 };
 
 export const addCredits = async (userId: string, amount: number): Promise<number | null> => {
-    if (!isSupabaseConfigured()) return null;
+  if (!isFirebaseConfigured()) return null;
 
-    const { data: profile, error: fetchError } = await supabase
-        .from('profiles')
-        .select('credits_balance')
-        .eq('id', userId)
-        .single();
-    
-    if (fetchError || !profile) return null;
+  try {
+    const docRef = doc(db, 'profiles', userId);
+    await updateDoc(docRef, {
+      credits_balance: increment(amount)
+    });
 
-    const newBalance = profile.credits_balance + amount;
-
-    const { data: updatedProfile, error: updateError } = await supabase
-        .from('profiles')
-        .update({ credits_balance: newBalance })
-        .eq('id', userId)
-        .select('credits_balance')
-        .single();
-        
-    if (updateError) return null;
-    
-    return updatedProfile.credits_balance;
+    const docSnap = await getDoc(docRef);
+    return docSnap.data()?.credits_balance || null;
+  } catch (e) {
+    console.error("Error adding credits:", e);
+    return null;
+  }
 };
 
 export const saveProject = async (project: Project) => {
-  if (!isSupabaseConfigured()) {
+  if (!isFirebaseConfigured()) {
     saveToLocalStorage(project);
     const webhookUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
     triggerWebhook(webhookUrl, project);
     return;
   }
 
-  const user = await supabase.auth.getUser();
-  if (!user.data.user) {
-      saveToLocalStorage(project);
-      return; 
+  const user = auth.currentUser;
+  if (!user) {
+    saveToLocalStorage(project);
+    return;
   }
 
-  const templateIdSafe = project.templateId || 'unknown_template';
-
-  // Sanitize payload and Project Type for DB enum
   const payload = {
-      id: project.id,
-      user_id: user.data.user.id,
-      template_id: templateIdSafe, 
-      template_name: project.templateName || 'Untitled',
-      thumbnail_url: project.thumbnailUrl,
-      status: project.status,
-      video_url: project.videoUrl,
-      error: project.error,
-      created_at: project.createdAt, 
-      project_type: sanitizeProjectTypeForDB(project.type),
-      cost: project.cost ?? 1,
-      metadata: project.metadata // Include metadata
+    user_id: user.uid,
+    user_email: user.email,
+    template_id: project.templateId || 'unknown_template',
+    template_name: project.templateName || 'Untitled',
+    thumbnail_url: project.thumbnailUrl,
+    status: project.status,
+    video_url: project.videoUrl,
+    error: project.error,
+    created_at: project.createdAt,
+    project_type: project.type || 'AVATAR',
+    cost: project.cost ?? 1,
+    metadata: project.metadata
   };
 
-  const { error } = await supabase
-    .from('projects')
-    .upsert(payload);
-
-  if (error) {
-    console.error("Save Project DB Error:", JSON.stringify(error, null, 2));
-    // If enum or cost column or metadata is missing, we still want to save locally
+  try {
+    await setDoc(doc(db, 'projects', project.id), payload, { merge: true });
+  } catch (error) {
+    console.error("Save Project Firestore Error:", error);
     saveToLocalStorage(project);
   }
 
-  // Handle Webhook notification on save (if completed immediately)
+  // Handle Webhook notification on save
   if (project.status === ProjectStatus.COMPLETED || project.status === ProjectStatus.FAILED) {
-      const webhookUrl = await getUserWebhookUrl(user.data.user.id);
-      triggerWebhook(webhookUrl, project);
+    const webhookUrl = await getUserWebhookUrl(user.uid);
+    triggerWebhook(webhookUrl, project);
   }
 };
 
 export const updateProjectStatus = async (id: string, updates: Partial<Project>) => {
-  if (!isSupabaseConfigured()) {
+  if (!isFirebaseConfigured()) {
     const projects = getLocalProjects();
     const index = projects.findIndex((p: any) => p.id === id);
     if (index >= 0) {
@@ -363,32 +384,27 @@ export const updateProjectStatus = async (id: string, updates: Partial<Project>)
       if (updates.thumbnailUrl) projects[index].thumbnail_url = updates.thumbnailUrl;
       if (updates.error) projects[index].error = updates.error;
       saveLocalProjects(projects);
-      
+
+      const fullProject = mapRowToProject(id, projects[index]);
       const webhookUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
-      const fullProject = mapRowToProject(projects[index]);
       triggerWebhook(webhookUrl, fullProject);
     }
     return;
   }
 
-  const dbUpdates: any = {};
-  if (updates.status) dbUpdates.status = updates.status;
-  if (updates.videoUrl) dbUpdates.video_url = updates.videoUrl;
-  if (updates.thumbnailUrl) dbUpdates.thumbnail_url = updates.thumbnailUrl;
-  if (updates.error) dbUpdates.error = updates.error;
+  try {
+    const docRef = doc(db, 'projects', id);
+    await updateDoc(docRef, updates);
 
-  const { data: updatedProjectRow, error } = await supabase
-    .from('projects')
-    .update(dbUpdates)
-    .eq('id', id)
-    .select('*')
-    .single();
-
-  if (!error && updatedProjectRow) {
-      const fullProject = mapRowToProject(updatedProjectRow);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const fullProject = mapRowToProject(id, docSnap.data());
       if (fullProject.status === ProjectStatus.COMPLETED || fullProject.status === ProjectStatus.FAILED) {
-          const webhookUrl = await getUserWebhookUrl(updatedProjectRow.user_id);
-          triggerWebhook(webhookUrl, fullProject);
+        const webhookUrl = await getUserWebhookUrl(docSnap.data().user_id);
+        triggerWebhook(webhookUrl, fullProject);
       }
+    }
+  } catch (error) {
+    console.error("Update Project Status Error:", error);
   }
 };

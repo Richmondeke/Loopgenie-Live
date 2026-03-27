@@ -2,10 +2,11 @@
 import React, { useState, useEffect } from 'react';
 import { IntegrationStatus, ScheduledPost, Project } from '../types';
 import { Twitter, Send, Calendar, Clock, LogOut, Linkedin, Instagram, Loader2, AlertCircle, ExternalLink, RefreshCw, Zap, Save, CheckCircle, Video, ChevronDown, Search } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from '../supabaseClient';
 import { getCurrentUser, getUserProfile, updateUserProfile } from '../services/authService';
 import { dispatchManualWebhook, dispatchProjectToWebhook } from '../services/webhookService';
 import { fetchProjects } from '../services/projectService';
+import { db } from '../firebase';
+import { collection, query, where, getDocs, doc, setDoc, deleteDoc, orderBy, addDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 
 export const Integrations: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
@@ -53,7 +54,7 @@ export const Integrations: React.FC = () => {
         const connected = params.get('connected');
         const platform = params.get('platform');
         const error = params.get('error');
-        
+
         if (error) {
             alert(`Connection failed: ${error}`);
             window.history.replaceState({}, '', window.location.pathname);
@@ -68,20 +69,16 @@ export const Integrations: React.FC = () => {
                     const mockUsername = params.get('username') || user.user_metadata?.full_name?.replace(/\s/g, '').toLowerCase() || 'connected_user';
                     const handle = mockUsername.startsWith('@') ? mockUsername : `@${mockUsername}`;
 
-                    if (isSupabaseConfigured()) {
-                        const { error } = await supabase
-                            .from('social_integrations')
-                            .upsert({
-                                user_id: user.id,
-                                platform: platform,
-                                username: handle,
-                                connected: true,
-                                avatar_url: `https://ui-avatars.com/api/?name=${mockUsername}&background=random&color=fff&bold=true`
-                            }, { onConflict: 'user_id, platform' });
+                    const profileRef = doc(db, 'social_integrations', `${user.id}_${platform}`);
+                    await setDoc(profileRef, {
+                        user_id: user.id,
+                        platform: platform,
+                        username: handle,
+                        connected: true,
+                        avatar_url: `https://ui-avatars.com/api/?name=${mockUsername}&background=random&color=fff&bold=true`,
+                        updated_at: serverTimestamp()
+                    });
 
-                        if (error) throw error;
-                    }
-                    
                     window.history.replaceState({}, '', window.location.pathname);
                     await fetchData();
                 }
@@ -99,7 +96,7 @@ export const Integrations: React.FC = () => {
             // Load from Local Storage FIRST (Fallback for everyone)
             const localUrl = localStorage.getItem('loopgenie_webhook_url') || '';
             const localMethod = (localStorage.getItem('loopgenie_webhook_method') as any) || 'POST';
-            
+
             setWebhookUrl(localUrl);
             setWebhookMethod(localMethod);
 
@@ -107,63 +104,11 @@ export const Integrations: React.FC = () => {
             const { projects: loadedProjects } = await fetchProjects();
             setUserProjects(loadedProjects.filter(p => p.status === 'completed'));
 
-            if (!isSupabaseConfigured()) {
-                setIsLoading(false);
-                return;
-            }
-
-            const user = await getCurrentUser();
-            
-            if (user) {
-                // 1. Fetch Integrations
-                const { data: dbInteg, error: integError } = await supabase
-                    .from('social_integrations')
-                    .select('*')
-                    .eq('user_id', user.id);
-
-                if (!integError && dbInteg) {
-                    setIntegrations(prev => prev.map(p => {
-                        const found = dbInteg.find((d: any) => d.platform === p.id);
-                        return found 
-                            ? { ...p, connected: true, username: found.username, avatarUrl: found.avatar_url } 
-                            : { ...p, connected: false, username: undefined, avatarUrl: undefined };
-                    }));
-                }
-
-                // 2. Fetch User Webhook Settings from DB (Account override)
-                const profile = await getUserProfile(user.id);
-                
-                if (profile?.webhook_url) {
-                    setWebhookUrl(profile.webhook_url);
-                    localStorage.setItem('loopgenie_webhook_url', profile.webhook_url);
-                }
-                if (profile?.webhook_method) {
-                    setWebhookMethod(profile.webhook_method as any);
-                    localStorage.setItem('loopgenie_webhook_method', profile.webhook_method);
-                }
-
-                // 3. Fetch Posts
-                const { data: dbPosts, error: postsError } = await supabase
-                    .from('social_posts')
-                    .select('*')
-                    .eq('user_id', user.id)
-                    .order('created_at', { ascending: false });
-
-                if (!postsError && dbPosts) {
-                    setPosts(dbPosts.map((row: any) => ({
-                        id: row.id,
-                        content: row.content,
-                        platform: row.platform,
-                        scheduledAt: parseInt(row.scheduled_at) || Date.now(),
-                        status: row.status,
-                        mediaUrl: row.media_url
-                    })));
-                }
-            }
+            // setIsLoading(false) is handled by the onSnapshot for integrations now.
+            // If there are no integrations, it will still set isLoading to false.
         } catch (e) {
-            console.error("Fetch error", e);
-        } finally {
-            setIsLoading(false);
+            console.warn("Failed to load projects or local webhook settings:", e);
+            setIsLoading(false); // Ensure isLoading is set to false even if projects fail
         }
     };
 
@@ -175,26 +120,20 @@ export const Integrations: React.FC = () => {
             localStorage.setItem('loopgenie_webhook_method', webhookMethod);
 
             // 2. ALSO update DB if logged in
-            if (isSupabaseConfigured()) {
-                const user = await getCurrentUser();
-                if (user) {
-                    const result = await updateUserProfile(user.id, { 
-                        webhook_url: webhookUrl, 
-                        webhook_method: webhookMethod 
-                    });
-                    
-                    if (!result.success) {
-                        throw new Error(result.error || "Failed to save to database");
-                    }
-                    
-                    if (result.schemaMismatch) {
-                        console.warn("[Integrations] Database update skipped missing columns, but settings saved locally.");
-                    } else {
-                        console.log("[Integrations] Webhook saved to DB successfully.");
-                    }
+            const user = await getCurrentUser();
+            if (user) {
+                const result = await updateUserProfile(user.id, {
+                    webhook_url: webhookUrl,
+                    webhook_method: webhookMethod
+                });
+
+                if (!result.success) {
+                    throw new Error(result.error || "Failed to save to database");
                 }
+
+                console.log("[Integrations] Webhook saved to Firestore successfully.");
             }
-            
+
             setWebhookSaved(true);
             setTimeout(() => setWebhookSaved(false), 2000);
         } catch (e: any) {
@@ -206,54 +145,38 @@ export const Integrations: React.FC = () => {
     };
 
     const initiateConnection = async (platform: string) => {
-        setIsLoading(true);
-        try {
-            const returnUrl = window.location.origin + window.location.pathname;
-            let functionName = `auth-${platform}`;
-            if (platform === 'twitter') {
-                functionName = 'x_oauth_login';
-            }
-            const { data, error } = await supabase.functions.invoke(functionName, {
-                body: { redirect_url: returnUrl },
-                method: 'POST',
-            });
-            if (error) throw new Error(error.message || "Edge Function invocation failed");
-            if (data?.url) {
-                window.location.href = data.url;
-            } else if (typeof data === 'string' && data.startsWith('http')) {
-                window.location.href = data;
-            }
-        } catch (e: any) {
-            alert(`Connection Error: ${e.message}`);
-        } finally {
-            setIsLoading(false);
-        }
+        // NOTE: Social OAuth via Firebase Cloud Functions is pending backend implementation.
+        // For now, we will notify that this feature is being migrated.
+        alert(`Social connection for ${platform} is currently being migrated to Firebase Cloud Functions and will be available soon.`);
     };
-
     const handleDisconnect = async (platform: string) => {
-         const user = await getCurrentUser();
-         if (!user) return;
-         if (!confirm(`Disconnect ${platform}?`)) return;
-         setIntegrations(prev => prev.map(p => p.id === platform ? { ...p, connected: false } : p));
-         
-         if (isSupabaseConfigured()) {
-            await supabase
-               .from('social_integrations')
-               .delete()
-               .match({ user_id: user.id, platform: platform });
-         }
-         fetchData();
+        const user = await getCurrentUser();
+        if (!user) return;
+        if (!confirm(`Disconnect ${platform}?`)) return;
+        setIntegrations(prev => prev.map(p => p.id === platform ? { ...p, connected: false } : p));
+
+        const q = query(
+            collection(db, 'social_integrations'),
+            where('user_id', '==', user.id),
+            where('platform', '==', platform)
+        );
+        const snapshot = await getDocs(q);
+        snapshot.forEach(async (d) => {
+            await deleteDoc(doc(db, 'social_integrations', d.id));
+        });
+
+        await fetchData();
     };
 
     const handlePost = async () => {
         if (dispatchMode === 'TEXT' && !content.trim()) return;
         if (dispatchMode === 'PROJECT' && !selectedProjectId) return;
-        
+
         setIsPosting(true);
         try {
             const user = await getCurrentUser();
             const project = userProjects.find(p => p.id === selectedProjectId);
-            
+
             // 1. Platform Specific Dispatch
             if (selectedPlatform === 'webhook') {
                 let result;
@@ -262,18 +185,18 @@ export const Integrations: React.FC = () => {
                 } else {
                     result = await dispatchManualWebhook(webhookUrl, content, webhookMethod);
                 }
-                
+
                 if (!result.success) {
                     throw new Error(result.error);
                 }
-                
+
                 alert("Data successfully pushed to Webhook!");
             } else {
                 // Social platform logic (Limited to Text for now)
                 let textToPost = dispatchMode === 'PROJECT' && project ? `Check out my new video: ${project.templateName}` : content;
                 let intentUrl = '';
                 const encodedText = encodeURIComponent(textToPost);
-                
+
                 if (selectedPlatform === 'twitter') {
                     intentUrl = `https://twitter.com/intent/tweet?text=${encodedText}`;
                     window.open(intentUrl, '_blank', 'width=550,height=420');
@@ -285,21 +208,19 @@ export const Integrations: React.FC = () => {
             }
 
             // 2. Database Logging (after successful dispatch)
-            if (user && isSupabaseConfigured()) {
+            if (user) {
                 const logContent = dispatchMode === 'PROJECT' && project ? `Project: ${project.templateName}` : content;
-                const newPost = {
-                    id: `post_${Date.now()}`,
+                await addDoc(collection(db, 'social_posts'), {
                     user_id: user.id,
                     content: logContent,
                     platform: selectedPlatform,
-                    status: 'posted', 
+                    status: 'posted',
                     scheduled_at: Date.now(),
-                    created_at: new Date().toISOString(),
-                    media_url: dispatchMode === 'PROJECT' && project ? project.videoUrl : undefined
-                };
-                await supabase.from('social_posts').insert(newPost);
+                    created_at: serverTimestamp(),
+                    media_url: dispatchMode === 'PROJECT' && project ? project.videoUrl : null
+                });
             }
-            
+
             setContent('');
             setSelectedProjectId('');
             await fetchData();
@@ -348,7 +269,7 @@ export const Integrations: React.FC = () => {
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                    
+
                     {/* --- LEFT COLUMN: CONNECTED ACCOUNTS --- */}
                     <div className="lg:col-span-5 space-y-6">
                         <div className="flex items-center gap-3 mb-2">
@@ -357,11 +278,10 @@ export const Integrations: React.FC = () => {
                         </div>
 
                         {/* Webhook Integration Card */}
-                        <div className={`p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${
-                            webhookUrl 
-                            ? 'bg-gray-900/80 border-orange-500/30 shadow-[0_4px_20px_-10px_rgba(249,115,22,0.3)]' 
+                        <div className={`p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${webhookUrl
+                            ? 'bg-gray-900/80 border-orange-500/30 shadow-[0_4px_20px_-10px_rgba(249,115,22,0.3)]'
                             : 'bg-gray-900/40 border-gray-800 hover:border-gray-700'
-                        }`}>
+                            }`}>
                             <div className="flex items-center gap-4 mb-4 relative z-10">
                                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-lg bg-orange-600 text-white`}>
                                     <Zap size={24} fill="currentColor" />
@@ -373,10 +293,10 @@ export const Integrations: React.FC = () => {
                                     </div>
                                 </div>
                             </div>
-                            
+
                             <div className="space-y-3 relative z-10">
                                 <div className="flex gap-2">
-                                    <select 
+                                    <select
                                         value={webhookMethod}
                                         onChange={(e) => setWebhookMethod(e.target.value as any)}
                                         className="bg-black/60 border border-gray-800 rounded-xl px-3 py-2.5 text-xs font-bold text-gray-300 outline-none focus:ring-1 focus:ring-orange-500"
@@ -385,19 +305,18 @@ export const Integrations: React.FC = () => {
                                         <option value="GET">GET</option>
                                     </select>
                                     <div className="relative flex-1">
-                                        <input 
-                                            type="text" 
+                                        <input
+                                            type="text"
                                             value={webhookUrl}
                                             onChange={(e) => setWebhookUrl(e.target.value)}
                                             placeholder="https://n8n.your-instance.com/webhook/..."
                                             className="w-full bg-black/60 border border-gray-800 rounded-xl px-4 py-2.5 text-sm text-gray-300 placeholder-gray-600 focus:ring-1 focus:ring-orange-500 outline-none transition-all"
                                         />
-                                        <button 
+                                        <button
                                             onClick={handleSaveWebhook}
                                             disabled={isSavingWebhook}
-                                            className={`absolute right-1 top-1 bottom-1 px-3 rounded-lg flex items-center justify-center transition-all ${
-                                                webhookSaved ? 'bg-green-600 text-white' : 'bg-orange-600 hover:bg-orange-500 text-white'
-                                            }`}
+                                            className={`absolute right-1 top-1 bottom-1 px-3 rounded-lg flex items-center justify-center transition-all ${webhookSaved ? 'bg-green-600 text-white' : 'bg-orange-600 hover:bg-orange-500 text-white'
+                                                }`}
                                         >
                                             {isSavingWebhook ? <Loader2 size={16} className="animate-spin" /> : webhookSaved ? <CheckCircle size={16} /> : <Save size={16} />}
                                         </button>
@@ -416,13 +335,12 @@ export const Integrations: React.FC = () => {
                         </div>
 
                         {integrations.map((integ) => (
-                            <div 
-                                key={integ.id} 
-                                className={`p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${
-                                    integ.connected 
-                                    ? 'bg-gray-900/80 border-indigo-500/30 shadow-[0_4px_20px_-10px_rgba(99,102,241,0.3)]' 
+                            <div
+                                key={integ.id}
+                                className={`p-5 rounded-2xl border transition-all duration-200 relative overflow-hidden ${integ.connected
+                                    ? 'bg-gray-900/80 border-indigo-500/30 shadow-[0_4px_20px_-10px_rgba(99,102,241,0.3)]'
                                     : 'bg-gray-900/40 border-gray-800 hover:border-gray-700'
-                                }`}
+                                    }`}
                             >
                                 <div className="flex items-center justify-between mb-4 relative z-10">
                                     <div className="flex items-center gap-4">
@@ -443,14 +361,14 @@ export const Integrations: React.FC = () => {
                                 {integ.connected ? (
                                     <div className="bg-black/40 rounded-xl p-3 flex items-center justify-between border border-gray-800 relative z-10">
                                         <div className="flex items-center gap-3">
-                                            <img 
-                                                src={integ.avatarUrl || `https://ui-avatars.com/api/?name=${integ.username}&background=random`} 
-                                                alt="Avatar" 
+                                            <img
+                                                src={integ.avatarUrl || `https://ui-avatars.com/api/?name=${integ.username}&background=random`}
+                                                alt="Avatar"
                                                 className="w-8 h-8 rounded-full border border-gray-700"
                                             />
                                             <span className="text-sm font-mono text-gray-300 font-bold">{integ.username}</span>
                                         </div>
-                                        <button 
+                                        <button
                                             onClick={() => handleDisconnect(integ.id)}
                                             className="text-gray-500 hover:text-red-400 transition-colors p-2 hover:bg-red-900/10 rounded-lg"
                                             title="Disconnect"
@@ -459,7 +377,7 @@ export const Integrations: React.FC = () => {
                                         </button>
                                     </div>
                                 ) : (
-                                    <button 
+                                    <button
                                         onClick={() => initiateConnection(integ.id)}
                                         disabled={isLoading}
                                         className="w-full py-3 bg-white hover:bg-gray-100 text-black text-sm font-bold rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 relative z-10 disabled:opacity-70 disabled:cursor-wait"
@@ -475,22 +393,22 @@ export const Integrations: React.FC = () => {
                     {/* --- RIGHT COLUMN: POST COMPOSER & HISTORY --- */}
                     <div className="lg:col-span-7 space-y-8">
                         <div className="bg-gray-900 border border-gray-800 rounded-3xl p-1 relative overflow-hidden shadow-2xl">
-                             <div className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 absolute inset-0 pointer-events-none" />
-                             
-                             <div className="p-5 relative">
+                            <div className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 absolute inset-0 pointer-events-none" />
+
+                            <div className="p-5 relative">
                                 <div className="flex items-center justify-between mb-4">
                                     <div className="flex items-center gap-2 text-indigo-400">
                                         <Send size={18} />
                                         <h3 className="font-bold text-white">Manual Dispatch</h3>
                                     </div>
                                     <div className="flex bg-black/40 p-1 rounded-lg border border-gray-800">
-                                        <button 
+                                        <button
                                             onClick={() => setDispatchMode('TEXT')}
                                             className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${dispatchMode === 'TEXT' ? 'bg-indigo-600 text-white' : 'text-gray-500'}`}
                                         >
                                             Custom Text
                                         </button>
-                                        <button 
+                                        <button
                                             onClick={() => setDispatchMode('PROJECT')}
                                             className={`px-3 py-1 rounded text-[10px] font-bold transition-all ${dispatchMode === 'PROJECT' ? 'bg-indigo-600 text-white' : 'text-gray-500'}`}
                                         >
@@ -522,7 +440,7 @@ export const Integrations: React.FC = () => {
                                         <div className="p-4 flex-1">
                                             <label className="text-[10px] font-bold text-gray-500 uppercase mb-2 block">Select Video Project</label>
                                             <div className="relative">
-                                                <select 
+                                                <select
                                                     value={selectedProjectId}
                                                     onChange={(e) => setSelectedProjectId(e.target.value)}
                                                     className="w-full bg-black/60 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white appearance-none outline-none focus:ring-1 focus:ring-indigo-500"
@@ -551,17 +469,16 @@ export const Integrations: React.FC = () => {
                                             )}
                                         </div>
                                     )}
-                                    
+
                                     <div className="px-4 pb-4 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-gray-800/50 pt-3 mt-auto">
                                         <div className="flex gap-2 w-full sm:w-auto overflow-x-auto no-scrollbar">
                                             {webhookUrl && (
                                                 <button
                                                     onClick={() => setSelectedPlatform('webhook')}
-                                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${
-                                                        selectedPlatform === 'webhook' 
-                                                        ? 'bg-orange-600 text-white border-orange-500' 
+                                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${selectedPlatform === 'webhook'
+                                                        ? 'bg-orange-600 text-white border-orange-500'
                                                         : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'
-                                                    }`}
+                                                        }`}
                                                 >
                                                     <Zap size={12} fill="currentColor" /> Webhook
                                                 </button>
@@ -570,11 +487,10 @@ export const Integrations: React.FC = () => {
                                                 <button
                                                     key={integ.id}
                                                     onClick={() => setSelectedPlatform(integ.id as any)}
-                                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${
-                                                        selectedPlatform === integ.id 
-                                                        ? 'bg-indigo-600 text-white border-indigo-500' 
+                                                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${selectedPlatform === integ.id
+                                                        ? 'bg-indigo-600 text-white border-indigo-500'
                                                         : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'
-                                                    }`}
+                                                        }`}
                                                 >
                                                     {integ.id === 'twitter' && <Twitter size={12} fill="currentColor" />}
                                                     {integ.id === 'linkedin' && <Linkedin size={12} fill="currentColor" />}
@@ -584,7 +500,7 @@ export const Integrations: React.FC = () => {
                                             ))}
                                         </div>
 
-                                        <button 
+                                        <button
                                             onClick={handlePost}
                                             disabled={connectedCount === 0 || (dispatchMode === 'TEXT' && !content.trim()) || (dispatchMode === 'PROJECT' && !selectedProjectId) || isPosting}
                                             className="bg-white hover:bg-gray-200 text-black px-6 py-2 rounded-lg font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 shadow-lg active:scale-95"
@@ -594,7 +510,7 @@ export const Integrations: React.FC = () => {
                                         </button>
                                     </div>
                                 </div>
-                             </div>
+                            </div>
                         </div>
 
                         <div>
@@ -602,7 +518,7 @@ export const Integrations: React.FC = () => {
                                 <Calendar size={18} />
                                 <h3 className="font-bold text-white">Event History</h3>
                             </div>
-                            
+
                             <div className="border border-dashed border-gray-800 rounded-3xl p-4 bg-gray-900/20 min-h-[150px]">
                                 {posts.length === 0 ? (
                                     <div className="h-full flex flex-col items-center justify-center py-10 text-gray-600">
@@ -629,9 +545,8 @@ export const Integrations: React.FC = () => {
                                                         </div>
                                                     )}
                                                     <div className="flex items-center gap-3 text-xs text-gray-500 font-medium">
-                                                        <span className={`px-2 py-0.5 rounded uppercase font-bold text-[10px] ${
-                                                            post.status === 'posted' ? 'bg-green-900/30 text-green-400 border border-green-900/50' : 'bg-yellow-900/30 text-yellow-400 border border-yellow-900/50'
-                                                        }`}>
+                                                        <span className={`px-2 py-0.5 rounded uppercase font-bold text-[10px] ${post.status === 'posted' ? 'bg-green-900/30 text-green-400 border border-green-900/50' : 'bg-yellow-900/30 text-yellow-400 border border-yellow-900/50'
+                                                            }`}>
                                                             {post.status}
                                                         </span>
                                                         <span>{new Date(post.scheduledAt).toLocaleString()}</span>

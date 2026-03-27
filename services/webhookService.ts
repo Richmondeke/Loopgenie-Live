@@ -1,6 +1,8 @@
 
 import { Project, ProjectStatus } from "../types";
-import { supabase, isSupabaseConfigured } from "../supabaseClient";
+import { auth, db } from "../firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { FIREBASE_FUNCTION_URL } from "../constants";
 
 /**
  * Utility to strip heavy base64 strings or redundant data from objects
@@ -8,10 +10,10 @@ import { supabase, isSupabaseConfigured } from "../supabaseClient";
  */
 const sanitizePayload = (obj: any): any => {
     if (!obj || typeof obj !== 'object') return obj;
-    
+
     // Create a shallow copy
     const copy = Array.isArray(obj) ? [...obj] : { ...obj };
-    
+
     for (const key in copy) {
         const val = copy[key];
         // 1. Strip base64 strings (longer than 1000 chars and starts with data:)
@@ -30,8 +32,8 @@ const sanitizePayload = (obj: any): any => {
  * Sends a manual test or data push to a webhook URL.
  */
 export const dispatchManualWebhook = async (
-    webhookUrl: string, 
-    content: string, 
+    webhookUrl: string,
+    content: string,
     method: string = 'POST'
 ): Promise<{ success: boolean; error?: string }> => {
     if (!webhookUrl || !webhookUrl.trim() || !webhookUrl.startsWith('http')) {
@@ -47,38 +49,42 @@ export const dispatchManualWebhook = async (
 
     const isLocalTarget = webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1');
 
-    if (isSupabaseConfigured()) {
-        try {
-            const { data, error } = await supabase.functions.invoke('gemini-api', {
-                body: {
-                    action: 'proxy-webhook',
-                    payload: {
-                        url: webhookUrl,
-                        data: payload,
-                        method: method
-                    }
+    // Use Firebase Cloud Function as proxy
+    try {
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'proxy-webhook',
+                payload: {
+                    url: webhookUrl,
+                    data: payload,
+                    method: method
                 }
-            });
+            })
+        });
 
-            if (error) {
-                console.error("[Webhook Proxy] Invocation Error:", error);
-                if (!isLocalTarget) {
-                    return { 
-                        success: false, 
-                        error: `Edge Function Error: ${error.message || 'The "gemini-api" function could not be reached.'}` 
-                    };
-                }
-            } else if (data?.error) {
-                return { success: false, error: `Destination Error (${data.status || 'Error'}): ${data.error}. ${data.details || ''}` };
-            } else if (data?.success) {
-                return { success: true };
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error("[Webhook Proxy] Invocation Error:", data);
+            if (!isLocalTarget) {
+                return {
+                    success: false,
+                    error: `Cloud Function Error: ${data.error || 'The "geminiApi" function could not be reached.'}`
+                };
             }
-        } catch (e: any) {
-            console.error("[Webhook Proxy] Unexpected Exception:", e);
-            if (!isLocalTarget) return { success: false, error: `Proxy call failed: ${e.message}` };
+        } else if (data?.error) {
+            return { success: false, error: `Destination Error (${data.status || 'Error'}): ${data.error}. ${data.details || ''}` };
+        } else if (data?.success) {
+            return { success: true };
         }
+    } catch (e: any) {
+        console.error("[Webhook Proxy] Unexpected Exception:", e);
+        if (!isLocalTarget) return { success: false, error: `Proxy call failed: ${e.message}` };
     }
 
+    // Direct fetch fallback for local development or if proxy fails
     try {
         let finalUrl = webhookUrl;
         const opts: RequestInit = { method: method.toUpperCase() };
@@ -132,22 +138,27 @@ export const dispatchProjectToWebhook = async (webhookUrl: string, project: any,
         }
     };
 
-    if (isSupabaseConfigured()) {
-        try {
-            const { data, error } = await supabase.functions.invoke('gemini-api', {
-                body: {
-                    action: 'proxy-webhook',
-                    payload: { url: webhookUrl, data: payload, method: method }
-                }
-            });
-            if (error) throw error;
-            if (data?.error) return { success: false, error: data.error };
-            return { success: true };
-        } catch (e: any) {
-            return { success: false, error: e.message };
+    // Use Firebase Cloud Function as proxy
+    try {
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'proxy-webhook',
+                payload: { url: webhookUrl, data: payload, method: method }
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok || data?.error) {
+            throw new Error(data?.error || `Request failed with status ${response.status}`);
         }
+        return { success: true };
+    } catch (e: any) {
+        console.warn("[Webhook Proxy Project] Failed, using direct fetch fallback:", e.message);
     }
 
+    // Direct fetch fallback
     try {
         const res = await fetch(webhookUrl, {
             method: method,
@@ -168,14 +179,17 @@ export const triggerWebhook = async (webhookUrl: string | undefined, project: Pr
     if (project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.FAILED) return;
 
     let method = 'POST';
-    if (isSupabaseConfigured()) {
+    const user = auth.currentUser;
+    if (user) {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (user) {
-                const { data } = await supabase.from('profiles').select('webhook_method').eq('id', user.id).single();
-                if (data?.webhook_method) method = data.webhook_method;
+            const profileDoc = await getDoc(doc(db, 'profiles', user.uid));
+            if (profileDoc.exists() && profileDoc.data()?.webhook_method) {
+                method = profileDoc.data()?.webhook_method;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn("[Webhook] Could not fetch profile for method, using localStorage/default.");
+            method = localStorage.getItem('loopgenie_webhook_method') || 'POST';
+        }
     } else {
         method = localStorage.getItem('loopgenie_webhook_method') || 'POST';
     }
@@ -204,20 +218,23 @@ export const triggerWebhook = async (webhookUrl: string | undefined, project: Pr
         }
     };
 
-    if (isSupabaseConfigured()) {
-        try {
-            const { data, error } = await supabase.functions.invoke('gemini-api', {
-                body: {
-                    action: 'proxy-webhook',
-                    payload: { url: webhookUrl, data: payload, method: method }
-                }
-            });
-            if (!error && !data?.error) return;
-        } catch (e) {
-            console.warn("[Webhook Auto Proxy] Failed, using direct fetch fallback.");
-        }
+    // Use Firebase Cloud Function as proxy
+    try {
+        const response = await fetch(FIREBASE_FUNCTION_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'proxy-webhook',
+                payload: { url: webhookUrl, data: payload, method: method }
+            })
+        });
+        const data = await response.json();
+        if (response.ok && !data?.error) return;
+    } catch (e) {
+        console.warn("[Webhook Auto Proxy] Failed, using direct fetch fallback.");
     }
 
+    // Direct fetch fallback
     try {
         let finalUrl = webhookUrl;
         const opts: RequestInit = { method };
@@ -236,3 +253,4 @@ export const triggerWebhook = async (webhookUrl: string | undefined, project: Pr
         console.error(`[Webhook] Delivery error:`, e);
     }
 };
+

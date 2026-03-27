@@ -14,526 +14,588 @@ import { Integrations } from './components/Integrations';
 import { Onboarding } from './components/Onboarding';
 import { AppView, Template, Project, ProjectStatus } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
-import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits } from './services/projectService';
-import { signOut, getSession, onAuthStateChange, getUserProfile } from './services/authService';
-import { Menu, Loader2, AlertTriangle } from 'lucide-react';
+import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits, subscribeToProjects } from './services/projectService';
+import { signOut, getSession, onAuthStateChange, getUserProfile, isUserAdmin, subscribeToUserProfile } from './services/authService';
+import { Menu, Loader2, AlertTriangle, ShieldCheck, LayoutDashboard } from 'lucide-react';
 import { DEFAULT_HEYGEN_API_KEY } from './constants';
 
 const STORAGE_KEY_HEYGEN = 'genavatar_heygen_key';
 
 const App: React.FC = () => {
-  const [session, setSession] = useState<any>(null);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const [userCredits, setUserCredits] = useState(0);
-  const [authLoading, setAuthLoading] = useState(true);
-  
-  // Navigation State
-  const [authView, setAuthView] = useState<'LOGIN' | 'SIGNUP' | null>(null);
-  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
-  const [isOnboarding, setIsOnboarding] = useState(false);
+    const [session, setSession] = useState<any>(null);
+    const [userProfile, setUserProfile] = useState<any>(null);
+    const [userCredits, setUserCredits] = useState(0);
+    const [authLoading, setAuthLoading] = useState(true);
 
-  const [currentView, setCurrentView] = useState<AppView>(AppView.TEMPLATES);
-  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
-  const [selectedProjectData, setSelectedProjectData] = useState<any | null>(null); // For restoring
-  const [galleryInitialView, setGalleryInitialView] = useState<'DASHBOARD' | 'AVATAR_SELECT'>('DASHBOARD');
+    // Navigation State
+    const [authView, setAuthView] = useState<'LOGIN' | 'SIGNUP' | null>(null);
+    const [isRecoveryMode, setIsRecoveryMode] = useState(false);
+    const [isOnboarding, setIsOnboarding] = useState(false);
 
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
-  
-  const [heyGenKey, setHeyGenKey] = useState(localStorage.getItem(STORAGE_KEY_HEYGEN) || DEFAULT_HEYGEN_API_KEY);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [dbError, setDbError] = useState<string | null>(null);
+    const [currentView, setCurrentView] = useState<AppView>(AppView.TEMPLATES);
+    const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+    const [selectedProjectData, setSelectedProjectData] = useState<any | null>(null); // For restoring
+    const [galleryInitialView, setGalleryInitialView] = useState<'DASHBOARD' | 'AVATAR_SELECT'>('DASHBOARD');
 
-  // Theme State
-  const [isDarkMode, setIsDarkMode] = useState(() => {
-    if (typeof window !== 'undefined') {
-        return localStorage.getItem('loopgenie_theme') === 'dark' || 
-               (!localStorage.getItem('loopgenie_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    }
-    return false;
-  });
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
 
-  // Apply Theme Effect
-  useEffect(() => {
-    if (isDarkMode) {
-        document.documentElement.classList.add('dark');
-        localStorage.setItem('loopgenie_theme', 'dark');
-    } else {
-        document.documentElement.classList.remove('dark');
-        localStorage.setItem('loopgenie_theme', 'light');
-    }
-  }, [isDarkMode]);
+    const [heyGenKey, setHeyGenKey] = useState(localStorage.getItem(STORAGE_KEY_HEYGEN) || DEFAULT_HEYGEN_API_KEY);
+    const [isGenerating, setIsGenerating] = useState(false);
+    const [dbError, setDbError] = useState<string | null>(null);
 
-  const toggleTheme = () => setIsDarkMode(!isDarkMode);
-
-  const loadProfile = async (userId: string) => {
-      try {
-          const profile = await getUserProfile(userId);
-          if (profile) {
-              setUserProfile(profile);
-              setUserCredits(profile.credits_balance);
-          }
-      } catch (e) {
-          console.warn("Failed to load profile:", e);
-      }
-  };
-
-  const loadProjects = useCallback(async () => {
-      setDbError(null);
-      const { projects: loaded, error } = await fetchProjects();
-      if (error) {
-          // If 42P17 (Recursion), it means the Admin policy is broken
-          if (error.code === '42P17') {
-              setDbError("Database Policy Error: Infinite Recursion Detected. Please run the 'Emergency Fix' script from SCHEMA.md in your Supabase SQL Editor.");
-          } else {
-              // Just a warning for other errors
-              console.warn("Could not fetch projects:", error);
-          }
-      } else {
-          setProjects(loaded);
-      }
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-
-    // Failsafe: If Auth takes too long (e.g. Supabase unavailable), allow app to load in guest/landing state
-    const authTimeout = setTimeout(() => {
-        if (mounted && authLoading) {
-            console.warn("Auth check timed out. Forcing load.");
-            setAuthLoading(false);
+    // Theme State
+    const [isDarkMode, setIsDarkMode] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('loopgenie_theme') === 'dark' ||
+                (!localStorage.getItem('loopgenie_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
         }
-    }, 2500);
-
-    getSession().then(({ data }) => {
-        if (!mounted) return;
-        setSession(data.session);
-        if (data.session?.user) {
-            loadProfile(data.session.user.id);
-            checkOnboardingStatus(data.session.user.id);
-        }
-        setAuthLoading(false);
-        clearTimeout(authTimeout);
-    }).catch((e) => {
-        console.error("Auth check failed:", e);
-        if (mounted) setAuthLoading(false);
-        clearTimeout(authTimeout);
+        return false;
     });
 
-    const { data } = onAuthStateChange((event, session) => {
-      console.log("Auth Event:", event);
-      if (!mounted) return;
-      
-      if (event === 'PASSWORD_RECOVERY') {
-          setIsRecoveryMode(true);
-      }
-      setSession(session);
-      if (session?.user) {
-        loadProfile(session.user.id);
-        checkOnboardingStatus(session.user.id);
-        setAuthView(null);
-      }
-      // Ensure loading is cleared on auth change
-      setAuthLoading(false); 
-    });
+    // Apply Theme Effect
+    useEffect(() => {
+        if (isDarkMode) {
+            document.documentElement.classList.add('dark');
+            localStorage.setItem('loopgenie_theme', 'dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+            localStorage.setItem('loopgenie_theme', 'light');
+        }
+    }, [isDarkMode]);
 
-    return () => {
-        mounted = false;
-        clearTimeout(authTimeout);
-        if (data && data.subscription) {
-            data.subscription.unsubscribe();
+    const toggleTheme = () => setIsDarkMode(!isDarkMode);
+
+    // Robust admin check using centralized logic
+    const isAdmin = userProfile?.isAdmin || isUserAdmin(session?.user?.email);
+
+    const loadProfile = async (userId: string) => {
+        try {
+            const profile = await getUserProfile(userId);
+            if (profile) {
+                setUserProfile(profile);
+                setUserCredits(profile.credits_balance);
+            }
+        } catch (e) {
+            console.warn("Failed to load profile:", e);
         }
     };
-  }, []);
 
-  const checkOnboardingStatus = (userId: string) => {
-      const onboardingKey = `loopgenie_onboarding_${userId}`;
-      const hasCompleted = localStorage.getItem(onboardingKey);
-      
-      // Also check if we already have a custom key saved
-      const savedKey = localStorage.getItem(STORAGE_KEY_HEYGEN);
-      const hasCustomKey = savedKey && savedKey !== DEFAULT_HEYGEN_API_KEY;
-
-      if (!hasCompleted && !hasCustomKey) {
-          setIsOnboarding(true);
-      }
-  };
-
-  useEffect(() => {
-    if (session && heyGenKey) {
-        getAvatars(heyGenKey).catch(e => console.warn("Background avatar fetch failed:", e));
-        getVoices(heyGenKey).catch(e => console.warn("Background voice fetch failed:", e));
-    }
-  }, [session, heyGenKey]);
-
-  useEffect(() => {
-    if (session) {
-      loadProjects();
-    }
-  }, [session, loadProjects]);
-
-  useEffect(() => {
-    if (heyGenKey) {
-        localStorage.setItem(STORAGE_KEY_HEYGEN, heyGenKey);
-    }
-  }, [heyGenKey]);
-
-  const pollStatuses = useCallback(async () => {
-    if (!session) return;
-    const activeProjects = projects.filter(p => p.status === ProjectStatus.PROCESSING || p.status === ProjectStatus.PENDING);
-    if (activeProjects.length === 0) return;
-
-    const updatedProjects = await Promise.all(activeProjects.map(async (project) => {
-        if (project.type === 'UGC_PRODUCT') return project;
-
-        const result = await checkVideoStatus(heyGenKey, project.id);
-        
-        if (result.status !== project.status || result.videoUrl) {
-            await updateProjectStatus(project.id, {
-                status: result.status,
-                videoUrl: result.videoUrl,
-                thumbnailUrl: result.thumbnailUrl,
-                error: result.error
-            });
-
-            return { 
-                ...project, 
-                status: result.status,
-                videoUrl: result.videoUrl || project.videoUrl,
-                thumbnailUrl: result.thumbnailUrl || project.thumbnailUrl,
-                error: result.error
-            };
-        }
-        return project;
-    }));
-
-    setProjects(prev => prev.map(p => {
-        const updated = updatedProjects.find(up => up.id === p.id);
-        return updated ? updated : p;
-    }));
-  }, [projects, heyGenKey, session]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-        pollStatuses();
-    }, 5000); 
-    return () => clearInterval(interval);
-  }, [pollStatuses]);
-
-  const handleSignOut = async () => {
-      await signOut();
-      setSession(null);
-      setUserProfile(null); 
-      setProjects([]);
-      setCurrentView(AppView.TEMPLATES);
-      setAuthView(null);
-      setIsOnboarding(false);
-  };
-
-  const handleOnboardingComplete = (keys: { heyGen?: string; gemini?: string }) => {
-      if (session?.user) {
-          const userId = session.user.id;
-          localStorage.setItem(`loopgenie_onboarding_${userId}`, 'true');
-      }
-
-      if (keys.heyGen) {
-          setHeyGenKey(keys.heyGen);
-          localStorage.setItem(STORAGE_KEY_HEYGEN, keys.heyGen);
-      }
-
-      if (keys.gemini) {
-          localStorage.setItem('genavatar_gemini_key', keys.gemini);
-      }
-
-      setIsOnboarding(false);
-  };
-
-  const handleSelectTemplate = (template: Template) => {
-    if (template.mode === 'AVATAR') {
-        setGalleryInitialView('AVATAR_SELECT');
-    } else {
-        setGalleryInitialView('DASHBOARD');
-    }
-    setSelectedProjectData(null); // Clear previous edit data
-    setSelectedTemplate(template);
-    setCurrentView(AppView.TEMPLATES);
-  };
-
-  const handleEditProject = (project: Project) => {
-      // Reconstruct template from project
-      const template: Template = {
-          id: project.templateId,
-          name: project.templateName,
-          category: 'Saved',
-          thumbnailUrl: project.thumbnailUrl,
-          mode: project.type as any,
-          variables: []
-      };
-      
-      setSelectedProjectData(project.metadata);
-      setSelectedTemplate(template);
-      setCurrentView(AppView.TEMPLATES); // Go to Editor view
-  };
-
-  const handleGenerate = async (data: any) => {
-    if (!selectedTemplate || !session) return;
-    
-    const cost = data.cost || 1;
-    if (userCredits < cost) {
-        setIsUpgradeModalOpen(true);
-        throw new Error("Insufficient credits");
-    }
-
-    try {
-        setIsGenerating(true);
-
-        const confirmedBalance = await deductCredits(session.user.id, cost);
-        if (confirmedBalance !== null) {
-            setUserCredits(confirmedBalance);
+    const loadProjects = useCallback(async () => {
+        setDbError(null);
+        const { projects: loaded, error } = await fetchProjects();
+        if (error) {
+            console.warn("Could not fetch projects:", error);
         } else {
-             setUserCredits(prev => Math.max(0, prev - cost));
+            setProjects(loaded);
+        }
+    }, []);
+
+    useEffect(() => {
+        let mounted = true;
+
+        // Failsafe: If Auth takes too long (e.g. Supabase unavailable), allow app to load in guest/landing state
+        const authTimeout = setTimeout(() => {
+            if (mounted && authLoading) {
+                console.warn("Auth check timed out. Forcing load.");
+                setAuthLoading(false);
+            }
+        }, 2500);
+
+        getSession().then(({ data }) => {
+            if (!mounted) return;
+            setSession(data.session);
+            if (data.session?.user) {
+                loadProfile(data.session.user.uid);
+                checkOnboardingStatus(data.session.user.uid);
+            }
+            setAuthLoading(false);
+            clearTimeout(authTimeout);
+        }).catch((e) => {
+            console.error("Auth check failed:", e);
+            if (mounted) setAuthLoading(false);
+            clearTimeout(authTimeout);
+        });
+
+        const { data } = onAuthStateChange((event, session) => {
+            console.log("Auth Event:", event);
+            if (!mounted) return;
+
+            if (event === 'PASSWORD_RECOVERY') {
+                setIsRecoveryMode(true);
+            }
+            setSession(session);
+            if (session?.user) {
+                loadProfile(session.user.uid);
+                checkOnboardingStatus(session.user.uid);
+                setAuthView(null);
+            }
+            // Ensure loading is cleared on auth change
+            setAuthLoading(false);
+        });
+
+        return () => {
+            mounted = false;
+            clearTimeout(authTimeout);
+            if (data && data.subscription) {
+                data.subscription.unsubscribe();
+            }
+        };
+    }, []);
+
+    // Real-time Profile and Projects Subscription
+    useEffect(() => {
+        if (!session?.user?.uid) {
+            setUserProfile(null);
+            setUserCredits(0);
+            setProjects([]);
+            return;
         }
 
-        let newProject: Project;
-        let idPrefix = 'ugc_';
-        if (data.type === 'STORYBOOK') idPrefix = 'stor_';
-        else if (data.type === 'SHORTS') idPrefix = 'short_';
-        else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
-        else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
-        else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
-        else if (data.type === 'FASHION_SHOOT') idPrefix = 'fash_';
+        const unsubProfile = subscribeToUserProfile(session.user.uid, (profile) => {
+            if (profile) {
+                setUserProfile(profile);
+                setUserCredits(profile.credits_balance);
+            }
+        });
 
-        if (data.isDirectSave) {
-            newProject = {
-                id: `${idPrefix}${Date.now()}`,
-                templateId: selectedTemplate.id,
-                templateName: data.templateName || selectedTemplate.name,
-                thumbnailUrl: data.thumbnailUrl || 'https://via.placeholder.com/640x360?text=Project',
-                videoUrl: data.videoUrl,
-                status: ProjectStatus.COMPLETED,
-                createdAt: Date.now(),
-                type: data.type || 'UGC_PRODUCT',
-                cost: cost,
-                metadata: data.manifest // SAVE METADATA
-            };
+        const unsubProjects = subscribeToProjects((loaded) => {
+            setProjects(loaded);
+        });
+
+        return () => {
+            unsubProfile();
+            unsubProjects();
+        };
+    }, [session?.user?.uid]);
+
+    const checkOnboardingStatus = (userId: string) => {
+        const onboardingKey = `loopgenie_onboarding_${userId}`;
+        const hasCompleted = localStorage.getItem(onboardingKey);
+
+        // Also check if we already have a custom key saved
+        const savedKey = localStorage.getItem(STORAGE_KEY_HEYGEN);
+        const hasCustomKey = savedKey && savedKey !== DEFAULT_HEYGEN_API_KEY;
+
+        if (!hasCompleted && !hasCustomKey) {
+            setIsOnboarding(true);
+        }
+    };
+
+    useEffect(() => {
+        if (session && heyGenKey) {
+            getAvatars(heyGenKey).catch(e => console.warn("Background avatar fetch failed:", e));
+            getVoices(heyGenKey).catch(e => console.warn("Background voice fetch failed:", e));
+        }
+    }, [session, heyGenKey]);
+
+    useEffect(() => {
+        if (session) {
+            loadProjects();
+        }
+    }, [session, loadProjects]);
+
+    useEffect(() => {
+        if (heyGenKey) {
+            localStorage.setItem(STORAGE_KEY_HEYGEN, heyGenKey);
+        }
+    }, [heyGenKey]);
+
+    const pollStatuses = useCallback(async () => {
+        if (!session) return;
+        const activeProjects = projects.filter(p => p.status === ProjectStatus.PROCESSING || p.status === ProjectStatus.PENDING);
+        if (activeProjects.length === 0) return;
+
+        const updatedProjects = await Promise.all(activeProjects.map(async (project) => {
+            if (project.type === 'UGC_PRODUCT') return project;
+
+            const result = await checkVideoStatus(heyGenKey, project.id);
+
+            if (result.status !== project.status || result.videoUrl) {
+                await updateProjectStatus(project.id, {
+                    status: result.status,
+                    videoUrl: result.videoUrl,
+                    thumbnailUrl: result.thumbnailUrl,
+                    error: result.error
+                });
+
+                return {
+                    ...project,
+                    status: result.status,
+                    videoUrl: result.videoUrl || project.videoUrl,
+                    thumbnailUrl: result.thumbnailUrl || project.thumbnailUrl,
+                    error: result.error
+                };
+            }
+            return project;
+        }));
+
+        setProjects(prev => prev.map(p => {
+            const updated = updatedProjects.find(up => up.id === p.id);
+            return updated ? updated : p;
+        }));
+    }, [projects, heyGenKey, session]);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            pollStatuses();
+        }, 5000);
+        return () => clearInterval(interval);
+    }, [pollStatuses]);
+
+    const handleSignOut = async () => {
+        await signOut();
+        setSession(null);
+        setUserProfile(null);
+        setProjects([]);
+        setCurrentView(AppView.TEMPLATES);
+        setAuthView(null);
+        setIsOnboarding(false);
+    };
+
+    const handleOnboardingComplete = (keys: { heyGen?: string; gemini?: string }) => {
+        if (session?.user) {
+            const userId = session.user.uid || (session.user as any).id;
+            localStorage.setItem(`loopgenie_onboarding_${userId}`, 'true');
+        }
+
+        if (keys.heyGen) {
+            setHeyGenKey(keys.heyGen);
+            localStorage.setItem(STORAGE_KEY_HEYGEN, keys.heyGen);
+        }
+
+        if (keys.gemini) {
+            localStorage.setItem('genavatar_gemini_key', keys.gemini);
+        }
+
+        setIsOnboarding(false);
+    };
+
+    const handleSelectTemplate = (template: Template) => {
+        if (template.mode === 'AVATAR') {
+            setGalleryInitialView('AVATAR_SELECT');
         } else {
-            const jobId = await generateVideo(
-                heyGenKey,
-                selectedTemplate.id,
-                data.variables,
-                data.avatarId,
-                data.voiceId
-            );
-
-            newProject = {
-                id: jobId,
-                templateId: selectedTemplate.id,
-                templateName: selectedTemplate.name,
-                thumbnailUrl: selectedTemplate.thumbnailUrl,
-                status: ProjectStatus.PENDING,
-                createdAt: Date.now(),
-                type: 'AVATAR',
-                cost: cost,
-                metadata: data.manifest
-            };
-        }
-
-        await saveProject(newProject);
-        setProjects(prev => [newProject, ...prev]);
-        
-        if (data.shouldRedirect !== false) {
-             setSelectedTemplate(null);
-             setCurrentView(AppView.PROJECTS);
-        }
-
-    } catch (error: any) {
-        console.error("Generation failed:", error);
-        
-        try {
-            const refundedBalance = await refundCredits(session.user.id, cost);
-            if (refundedBalance !== null) {
-                setUserCredits(refundedBalance);
-            }
-        } catch (refundError) {
-            console.error("Failed to refund credits:", refundError);
-        }
-
-        let msg = error.message;
-        if (!msg && typeof error === 'object') {
-            try {
-                msg = JSON.stringify(error);
-            } catch (e) {
-                msg = "Unknown error occurred";
-            }
-        }
-        
-        alert(`Generation Failed: ${msg}. \n\nCredits have been refunded.`);
-        throw error;
-    } finally {
-        setIsGenerating(false);
-    }
-  };
-
-  const handlePaymentSuccess = async (amount: number) => {
-      if (!session) return;
-      try {
-          const newBalance = await addCredits(session.user.id, amount);
-          if (newBalance !== null) {
-              setUserCredits(newBalance);
-              alert(`Successfully added ${amount} credits!`);
-          }
-      } catch (e) {
-          console.error("Failed to add credits:", e);
-          alert("Payment successful, but failed to update balance. Please contact support.");
-      }
-  };
-
-  const handleRefreshProjects = () => {
-      loadProjects();
-  };
-
-  const renderContent = () => {
-    if (selectedTemplate && currentView === AppView.TEMPLATES) {
-        return (
-            <Editor 
-                template={selectedTemplate} 
-                onBack={() => setSelectedTemplate(null)}
-                onGenerate={handleGenerate}
-                isGenerating={isGenerating}
-                heyGenKey={heyGenKey}
-                userCredits={userCredits}
-                initialData={selectedProjectData} // Pass workflow data
-            />
-        );
-    }
-
-    switch (currentView) {
-      case AppView.TEMPLATES:
-        return (
-            <TemplateGallery 
-                onSelectTemplate={handleSelectTemplate} 
-                heyGenKey={heyGenKey} 
-                initialView={galleryInitialView}
-                userProfile={userProfile}
-                recentProjects={projects}
-            />
-        );
-      case AppView.PROJECTS:
-        return <ProjectList 
-            projects={projects} 
-            onPollStatus={handleRefreshProjects} 
-            onEditProject={handleEditProject} 
-        />;
-      case AppView.ADMIN:
-        return <AdminDashboard initialTab="OVERVIEW" />;
-      case AppView.ADMIN_USERS:
-        return <AdminDashboard initialTab="USERS" />;
-      case AppView.SETTINGS:
-        return (
-            <Settings 
-                heyGenKey={heyGenKey} 
-                setHeyGenKey={setHeyGenKey} 
-            />
-        );
-      case AppView.INTEGRATIONS:
-        return <Integrations />;
-      case AppView.ASSETS:
-        return <div className="flex items-center justify-center h-full text-gray-400">Assets Management (Coming Soon)</div>;
-      case AppView.HELP:
-        return <div className="flex items-center justify-center h-full text-gray-400">Documentation & Help (Coming Soon)</div>;
-      default:
-        return <TemplateGallery onSelectTemplate={handleSelectTemplate} heyGenKey={heyGenKey} />;
-    }
-  };
-
-  if (authLoading) {
-      return (
-          <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-              <Loader2 className="animate-spin text-indigo-600" size={48} />
-          </div>
-      );
-  }
-
-  if (isRecoveryMode) return <UpdatePassword />;
-
-  if (!session) {
-      if (authView) return <Auth key={authView} initialView={authView} onBack={() => setAuthView(null)} />;
-      return (
-        <LandingPage 
-            onLogin={() => setAuthView('LOGIN')} 
-            onSignup={() => setAuthView('SIGNUP')} 
-            isDarkMode={isDarkMode}
-            toggleTheme={toggleTheme}
-        />
-      );
-  }
-
-  // Show Onboarding if logged in and not completed
-  if (isOnboarding) {
-      return (
-          <Onboarding 
-            onComplete={handleOnboardingComplete} 
-            onSkip={() => handleOnboardingComplete({})} 
-          />
-      );
-  }
-
-  return (
-    <div className="flex h-screen bg-background dark:bg-gray-900 relative transition-colors duration-200">
-      <Sidebar 
-        currentView={currentView} 
-        onChangeView={(view) => {
-            setCurrentView(view);
-            if (view !== AppView.TEMPLATES) {
-                setSelectedTemplate(null);
-            }
-            setIsMobileMenuOpen(false);
             setGalleryInitialView('DASHBOARD');
-        }}
-        isMobileOpen={isMobileMenuOpen}
-        toggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        onSignOut={handleSignOut}
-        credits={userCredits}
-        onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
-        isAdmin={userProfile?.isAdmin} 
-        isDarkMode={isDarkMode}
-        toggleTheme={toggleTheme}
-      />
+        }
+        setSelectedProjectData(null); // Clear previous edit data
+        setSelectedTemplate(template);
+        setCurrentView(AppView.TEMPLATES);
+    };
 
-      <main className="flex-1 overflow-hidden flex flex-col relative">
-        <header className="md:hidden bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 flex items-center justify-between z-20 relative">
-             <div className="font-bold text-gray-900 dark:text-white">LoopGenie</div>
-             <button onClick={() => setIsMobileMenuOpen(true)} className="p-2 text-gray-600 dark:text-gray-300">
-                <Menu />
-             </button>
-        </header>
-        
-        {dbError && (
-            <div className="bg-red-600 text-white p-3 text-sm font-bold flex items-center justify-between shadow-md z-50">
-                <div className="flex items-center gap-2">
-                    <AlertTriangle size={18} className="text-yellow-300" />
-                    <span>{dbError}</span>
-                </div>
-                <button onClick={() => setDbError(null)} className="bg-white/20 hover:bg-white/30 rounded px-2 py-1 text-xs">Dismiss</button>
+    const handleEditProject = (project: Project) => {
+        // Reconstruct template from project
+        const template: Template = {
+            id: project.templateId,
+            name: project.templateName,
+            category: 'Saved',
+            thumbnailUrl: project.thumbnailUrl,
+            mode: project.type as any,
+            variables: []
+        };
+
+        setSelectedProjectData(project.metadata);
+        setSelectedTemplate(template);
+        setCurrentView(AppView.TEMPLATES); // Go to Editor view
+    };
+
+    const handleGenerate = async (data: any) => {
+        if (!selectedTemplate || !session) return;
+
+        const cost = data.cost || 1;
+        if (userCredits < cost) {
+            setIsUpgradeModalOpen(true);
+            throw new Error("Insufficient credits");
+        }
+
+        try {
+            setIsGenerating(true);
+
+            const confirmedBalance = await deductCredits(session.user.uid || (session.user as any).id, cost);
+            if (confirmedBalance !== null) {
+                setUserCredits(confirmedBalance);
+            } else {
+                setUserCredits(prev => Math.max(0, prev - cost));
+            }
+
+            let newProject: Project;
+            let idPrefix = 'ugc_';
+            if (data.type === 'STORYBOOK') idPrefix = 'stor_';
+            else if (data.type === 'SHORTS') idPrefix = 'short_';
+            else if (data.type === 'IMAGE_TO_VIDEO') idPrefix = 'imgv_';
+            else if (data.type === 'TEXT_TO_VIDEO') idPrefix = 'txtv_';
+            else if (data.type === 'AUDIOBOOK') idPrefix = 'aud_';
+            else if (data.type === 'FASHION_SHOOT') idPrefix = 'fash_';
+
+            if (data.isDirectSave) {
+                newProject = {
+                    id: `${idPrefix}${Date.now()}`,
+                    templateId: selectedTemplate.id,
+                    templateName: data.templateName || selectedTemplate.name,
+                    thumbnailUrl: data.thumbnailUrl || 'https://via.placeholder.com/640x360?text=Project',
+                    videoUrl: data.videoUrl,
+                    status: ProjectStatus.COMPLETED,
+                    createdAt: Date.now(),
+                    type: data.type || 'UGC_PRODUCT',
+                    cost: cost,
+                    metadata: data.manifest // SAVE METADATA
+                };
+            } else {
+                const jobId = await generateVideo(
+                    heyGenKey,
+                    selectedTemplate.id,
+                    data.variables,
+                    data.avatarId,
+                    data.voiceId
+                );
+
+                newProject = {
+                    id: jobId,
+                    templateId: selectedTemplate.id,
+                    templateName: selectedTemplate.name,
+                    thumbnailUrl: selectedTemplate.thumbnailUrl,
+                    status: ProjectStatus.PENDING,
+                    createdAt: Date.now(),
+                    type: 'AVATAR',
+                    cost: cost,
+                    metadata: data.manifest
+                };
+            }
+
+            await saveProject(newProject);
+            setProjects(prev => [newProject, ...prev]);
+
+            if (data.shouldRedirect !== false) {
+                setSelectedTemplate(null);
+                setCurrentView(AppView.PROJECTS);
+            }
+
+        } catch (error: any) {
+            console.error("Generation failed:", error);
+
+            try {
+                const refundedBalance = await refundCredits(session.user.uid, cost);
+                if (refundedBalance !== null) {
+                    setUserCredits(refundedBalance);
+                }
+            } catch (refundError) {
+                console.error("Failed to refund credits:", refundError);
+            }
+
+            let msg = error.message;
+            if (!msg && typeof error === 'object') {
+                try {
+                    msg = JSON.stringify(error);
+                } catch (e) {
+                    msg = "Unknown error occurred";
+                }
+            }
+
+            alert(`Generation Failed: ${msg}. \n\nCredits have been refunded.`);
+            throw error;
+        } finally {
+            setIsGenerating(false);
+        }
+    };
+
+    const handlePaymentSuccess = async (amount: number) => {
+        if (!session) return;
+        try {
+            const newBalance = await addCredits(session.user.uid, amount);
+            if (newBalance !== null) {
+                setUserCredits(newBalance);
+                alert(`Successfully added ${amount} credits!`);
+            }
+        } catch (e) {
+            console.error("Failed to add credits:", e);
+            alert("Payment successful, but failed to update balance. Please contact support.");
+        }
+    };
+
+    const handleRefreshProjects = () => {
+        loadProjects();
+    };
+
+    const renderContent = () => {
+        if (selectedTemplate && currentView === AppView.TEMPLATES) {
+            return (
+                <Editor
+                    template={selectedTemplate}
+                    onBack={() => setSelectedTemplate(null)}
+                    onGenerate={handleGenerate}
+                    isGenerating={isGenerating}
+                    heyGenKey={heyGenKey}
+                    userCredits={userCredits}
+                    initialData={selectedProjectData} // Pass workflow data
+                />
+            );
+        }
+
+        switch (currentView) {
+            case AppView.TEMPLATES:
+                return (
+                    <TemplateGallery
+                        onSelectTemplate={handleSelectTemplate}
+                        heyGenKey={heyGenKey}
+                        initialView={galleryInitialView}
+                        userProfile={userProfile}
+                        recentProjects={projects}
+                    />
+                );
+            case AppView.PROJECTS:
+                return <ProjectList
+                    projects={projects}
+                    onPollStatus={handleRefreshProjects}
+                    onEditProject={handleEditProject}
+                />;
+            case AppView.ADMIN:
+                return <AdminDashboard initialTab="OVERVIEW" currentUserId={session?.user?.uid} onCreditsUpdated={setUserCredits} />;
+            case AppView.ADMIN_USERS:
+                return <AdminDashboard initialTab="USERS" currentUserId={session?.user?.uid} onCreditsUpdated={setUserCredits} />;
+            case AppView.SETTINGS:
+                return (
+                    <Settings
+                        heyGenKey={heyGenKey}
+                        setHeyGenKey={setHeyGenKey}
+                    />
+                );
+            case AppView.INTEGRATIONS:
+                return <Integrations />;
+            case AppView.ASSETS:
+                return <div className="flex items-center justify-center h-full text-gray-400">Assets Management (Coming Soon)</div>;
+            case AppView.HELP:
+                return <div className="flex items-center justify-center h-full text-gray-400">Documentation & Help (Coming Soon)</div>;
+            default:
+                return <TemplateGallery onSelectTemplate={handleSelectTemplate} heyGenKey={heyGenKey} />;
+        }
+    };
+
+    if (authLoading) {
+        return (
+            <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+                <Loader2 className="animate-spin text-indigo-600" size={48} />
             </div>
-        )}
+        );
+    }
 
-        <div className="flex-1 relative h-full w-full">
-            {renderContent()}
+    if (isRecoveryMode) return <UpdatePassword />;
+
+    if (!session) {
+        if (authView) return <Auth key={authView} initialView={authView} onBack={() => setAuthView(null)} />;
+        return (
+            <LandingPage
+                onLogin={() => setAuthView('LOGIN')}
+                onSignup={() => setAuthView('SIGNUP')}
+                isDarkMode={isDarkMode}
+                toggleTheme={toggleTheme}
+            />
+        );
+    }
+
+    // Show Onboarding if logged in and not completed
+    if (isOnboarding) {
+        return (
+            <Onboarding
+                onComplete={handleOnboardingComplete}
+                onSkip={() => handleOnboardingComplete({})}
+            />
+        );
+    }
+
+    return (
+        <div className="flex h-screen bg-background dark:bg-gray-900 relative transition-colors duration-200">
+            <Sidebar
+                currentView={currentView}
+                onChangeView={(view) => {
+                    setCurrentView(view);
+                    if (view !== AppView.TEMPLATES) {
+                        setSelectedTemplate(null);
+                    }
+                    setIsMobileMenuOpen(false);
+                    setGalleryInitialView('DASHBOARD');
+                }}
+                isMobileOpen={isMobileMenuOpen}
+                toggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                onSignOut={handleSignOut}
+                credits={userCredits}
+                onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
+                isAdmin={isAdmin}
+                isDarkMode={isDarkMode}
+                toggleTheme={toggleTheme}
+            />
+
+            <main className="flex-1 overflow-hidden flex flex-col relative">
+                {/* Top Navbar */}
+                <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-4 sticky top-0 z-20 transition-colors">
+                    <div className="max-w-7xl mx-auto flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <button
+                                onClick={() => setIsMobileMenuOpen(true)}
+                                className="md:hidden p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                            >
+                                <Menu size={20} />
+                            </button>
+                            <div className="font-black text-xl tracking-tighter text-gray-900 dark:text-white bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
+                                LoopGenie
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                            {isAdmin ? (
+                                <button
+                                    onClick={() => setCurrentView(AppView.ADMIN)}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm ${currentView === AppView.ADMIN ? 'bg-indigo-600 text-white shadow-indigo-200 dark:shadow-none scale-105' : 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'}`}
+                                >
+                                    <ShieldCheck size={18} />
+                                    <span className="hidden sm:inline">Admin Dashboard</span>
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={() => setCurrentView(AppView.TEMPLATES)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold transition-all border border-gray-200 dark:border-gray-700"
+                                >
+                                    <LayoutDashboard size={18} />
+                                    <span className="hidden sm:inline">Go to Templates</span>
+                                </button>
+                            )}
+
+                            <div className="h-4 w-[1px] bg-gray-200 dark:bg-gray-700 mx-1 hidden sm:block"></div>
+
+                            <button
+                                onClick={() => setIsUpgradeModalOpen(true)}
+                                className="px-4 py-2 bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-500 hover:to-orange-600 text-white rounded-xl text-sm font-bold shadow-sm shadow-amber-200 dark:shadow-none transition-all active:scale-95"
+                            >
+                                Get Credits
+                            </button>
+                        </div>
+                    </div>
+                </header>
+
+                {dbError && (
+                    <div className="bg-red-600 text-white p-3 text-sm font-bold flex items-center justify-between shadow-md z-50">
+                        <div className="flex items-center gap-2">
+                            <AlertTriangle size={18} className="text-yellow-300" />
+                            <span>{dbError}</span>
+                        </div>
+                        <button onClick={() => setDbError(null)} className="bg-white/20 hover:bg-white/30 rounded px-2 py-1 text-xs">Dismiss</button>
+                    </div>
+                )}
+
+                <div className="flex-1 relative h-full w-full">
+                    {renderContent()}
+                </div>
+            </main>
+
+            {isUpgradeModalOpen && (
+                <UpgradeModal
+                    onClose={() => setIsUpgradeModalOpen(false)}
+                    onSuccess={handlePaymentSuccess}
+                    userEmail={session.user.email || ''}
+                    userName={userProfile?.full_name || ''}
+                />
+            )}
         </div>
-      </main>
-
-      {isUpgradeModalOpen && (
-        <UpgradeModal 
-            onClose={() => setIsUpgradeModalOpen(false)}
-            onSuccess={handlePaymentSuccess}
-            userEmail={session.user.email || ''}
-            userName={userProfile?.full_name || ''}
-        />
-      )}
-    </div>
-  );
+    );
 };
 
 export default App;

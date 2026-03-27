@@ -1,12 +1,14 @@
 
 import React, { useEffect, useState } from 'react';
-import { getAllProfiles } from '../services/authService';
-import { fetchAllProjectsAdmin, fetchProjectStatsAdmin } from '../services/projectService';
+import { getAllProfiles, subscribeToAllProfiles } from '../services/authService';
+import { fetchAllProjectsAdmin, fetchProjectStatsAdmin, addCredits, subscribeToAllProjectsAdmin } from '../services/projectService';
 import { UserProfile, Project, ProjectStatus } from '../types';
-import { Users, Activity, DollarSign, ShieldCheck, Search, ChevronLeft, ChevronRight, User, CreditCard, Calendar, X, Play, Image as ImageIcon, FileAudio, RefreshCw } from 'lucide-react';
+import { Users, Activity, DollarSign, ShieldCheck, Search, ChevronLeft, ChevronRight, User, CreditCard, Calendar, X, Play, Image as ImageIcon, FileAudio, RefreshCw, Coins, PlusCircle } from 'lucide-react';
 
 interface AdminDashboardProps {
     initialTab?: 'OVERVIEW' | 'USERS' | 'ACTIVITY';
+    currentUserId?: string;
+    onCreditsUpdated?: (newBalance: number) => void;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -15,16 +17,16 @@ const ITEMS_PER_PAGE = 10;
 const getEstProviderCost = (project: Project): number => {
     switch (project.type) {
         case 'AVATAR': return 2.00;
-        case 'UGC_PRODUCT': return project.cost && project.cost > 10 ? 1.60 : 0.50; 
-        case 'TEXT_TO_VIDEO': return project.cost && project.cost > 20 ? 1.50 : 0.50; 
+        case 'UGC_PRODUCT': return project.cost && project.cost > 10 ? 1.60 : 0.50;
+        case 'TEXT_TO_VIDEO': return project.cost && project.cost > 20 ? 1.50 : 0.50;
         case 'IMAGE_TO_VIDEO': return 0.50;
         case 'FASHION_SHOOT': return 0.10;
         case 'AUDIOBOOK': return 0.30;
-        case 'SHORTS': 
+        case 'SHORTS':
         case 'STORYBOOK':
-            if (project.cost === 5) return 0.32; 
-            if (project.cost === 9) return 0.54; 
-            if (project.cost === 16) return 1.03; 
+            if (project.cost === 5) return 0.32;
+            if (project.cost === 9) return 0.54;
+            if (project.cost === 16) return 1.03;
             return 0.50;
         default: return 0.10;
     }
@@ -44,7 +46,7 @@ const PaginationControls = ({ totalItems, currentPage, onPageChange }: any) => {
     );
 };
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OVERVIEW' }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OVERVIEW', currentUserId, onCreditsUpdated }) => {
     const [users, setUsers] = useState<UserProfile[]>([]);
     const [projects, setProjects] = useState<Project[]>([]);
     const [stats, setStats] = useState({ totalCost: 0, totalFailed: 0, totalCount: 0, activeUsers: 0 });
@@ -55,47 +57,77 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
     const [activityPage, setActivityPage] = useState(1);
     const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
     const [selectedMedia, setSelectedMedia] = useState<{ url: string; name: string; type: string } | null>(null);
+    const [addingCredits, setAddingCredits] = useState(false);
+    const [creditAmount, setCreditAmount] = useState<number>(10);
 
     useEffect(() => { if (!selectedUser) setActiveTab(initialTab); }, [initialTab, selectedUser]);
 
     useEffect(() => {
-        const loadData = async () => {
-            setLoading(true);
-            try {
-                // Parallel fetching with stats separated for speed
-                const [usersData, statsData, projectsData] = await Promise.all([
-                    getAllProfiles(),
-                    fetchProjectStatsAdmin(),
-                    fetchAllProjectsAdmin()
-                ]);
-                setUsers(usersData);
-                setStats(statsData);
-                setProjects(projectsData);
-            } catch (e) { 
-                console.error("Failed to load admin data", e); 
-            } finally { 
-                setLoading(false); 
-            }
+        setLoading(true);
+
+        // Initial Fetch for stats (not real-time for now to save reads, but could be)
+        fetchProjectStatsAdmin().then(setStats);
+
+        // Subscriptions for real-time data
+        const unsubProfiles = subscribeToAllProfiles((data) => {
+            setUsers(data);
+            setLoading(false);
+        });
+
+        const unsubProjects = subscribeToAllProjectsAdmin((data) => {
+            setProjects(data);
+        });
+
+        return () => {
+            unsubProfiles();
+            unsubProjects();
         };
-        loadData();
     }, []);
 
     const filteredUsers = users.filter(u => (u.email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (u.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()));
     const filteredProjects = projects.filter(p => (p.templateName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (p.user_email?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || (p.id?.toLowerCase() || '').includes(searchTerm.toLowerCase()));
 
     // Use lightweight stats for top cards instead of recalculating from heavy array
-    const estimatedRevenue = stats.totalCost * 0.10; 
+    const estimatedRevenue = stats.totalCost * 0.10;
     // We roughly estimate provider cost from the limited project list we have, or scale it
     // For accuracy we'd need full data, but for speed we use the stats + heuristic on loaded projects
     const estimatedProviderCost = projects.reduce((acc, p) => acc + getEstProviderCost(p), 0);
     const estimatedProfit = estimatedRevenue - estimatedProviderCost;
-    
+
     const handleUserClick = (user: UserProfile) => { setSelectedUser(user); setActivityPage(1); window.scrollTo(0, 0); };
     const handleBackToUsers = () => { setSelectedUser(null); setActiveTab('USERS'); };
     const handleOpenMedia = (project: Project) => {
         const url = project.videoUrl || project.thumbnailUrl;
         if (url && project.status === ProjectStatus.COMPLETED) {
             setSelectedMedia({ url: url, name: project.templateName, type: project.type || 'VIDEO' });
+        }
+    };
+
+    const handleAddCredits = async () => {
+        if (!selectedUser || creditAmount <= 0) return;
+        setAddingCredits(true);
+        try {
+            const newBalance = await addCredits(selectedUser.id, creditAmount);
+            if (newBalance !== null) {
+                // Update local state
+                const updatedUser = { ...selectedUser, credits_balance: newBalance };
+                setSelectedUser(updatedUser);
+                setUsers(prev => prev.map(u => u.id === selectedUser.id ? updatedUser : u));
+
+                // Sync with global state if it's the current user
+                if (selectedUser.id === currentUserId && onCreditsUpdated) {
+                    onCreditsUpdated(newBalance);
+                }
+
+                alert(`Successfully added ${creditAmount} credits to ${selectedUser.full_name || selectedUser.email}`);
+            } else {
+                alert("Failed to add credits. Please check console for errors.");
+            }
+        } catch (e) {
+            console.error("Add credits error:", e);
+            alert("Error adding credits.");
+        } finally {
+            setAddingCredits(false);
         }
     };
 
@@ -124,9 +156,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                                 <h2 className="text-xl font-bold text-gray-900 dark:text-white">{selectedUser.full_name || 'Anonymous User'}</h2>
                                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{selectedUser.email}</p>
                                 <div className="w-full space-y-3 mt-2">
-                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><CreditCard size={14}/> Balance</span><span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedUser.credits_balance} Credits</span></div>
-                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><Activity size={14}/> Total Spent</span><span className="font-bold text-gray-900 dark:text-white">{userCreditsUsed} Credits</span></div>
-                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><Calendar size={14}/> Joined</span><span className="font-medium text-gray-900 dark:text-white">Unknown</span></div>
+                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><CreditCard size={14} /> Balance</span><span className="font-bold text-indigo-600 dark:text-indigo-400">{selectedUser.credits_balance} Credits</span></div>
+                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><Activity size={14} /> Total Spent</span><span className="font-bold text-gray-900 dark:text-white">{userCreditsUsed} Credits</span></div>
+                                    <div className="flex justify-between items-center text-sm p-3 bg-gray-50 dark:bg-gray-700 rounded-lg"><span className="flex items-center gap-2 text-gray-600 dark:text-gray-300"><Calendar size={14} /> Joined</span><span className="font-medium text-gray-900 dark:text-white">Active</span></div>
+                                </div>
+
+                                <div className="w-full mt-8 pt-6 border-t border-gray-100 dark:border-gray-700">
+                                    <h4 className="text-xs font-bold text-gray-400 uppercase mb-4 text-left font-mono">Management Actions</h4>
+                                    <div className="flex flex-col gap-3">
+                                        <div className="flex items-center gap-2">
+                                            <div className="relative flex-1">
+                                                <Coins size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                                                <input
+                                                    type="number"
+                                                    value={creditAmount}
+                                                    onChange={(e) => setCreditAmount(parseInt(e.target.value) || 0)}
+                                                    className="w-full pl-9 pr-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-white font-mono"
+                                                    placeholder="Amount"
+                                                />
+                                            </div>
+                                            <button
+                                                onClick={handleAddCredits}
+                                                disabled={addingCredits || creditAmount <= 0}
+                                                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-bold transition-all flex items-center justify-center gap-2 min-w-[130px] shadow-sm active:scale-95"
+                                            >
+                                                {addingCredits ? <RefreshCw size={14} className="animate-spin" /> : <PlusCircle size={14} />}
+                                                Add Credits
+                                            </button>
+                                        </div>
+                                        <p className="text-[10px] text-gray-500 dark:text-gray-400 text-left">
+                                            Give credits for free or as part of a manual purchase.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -218,9 +279,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                                 <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded-xl"><Activity size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Est. Provider Cost</div><div className="text-2xl font-black text-gray-900 dark:text-white">${estimatedProviderCost.toFixed(2)}</div></div></div>
                                 <div className="text-xs text-gray-500 dark:text-gray-400 font-medium">Est. Margin: <span className="font-bold text-green-600 dark:text-green-400">${estimatedProfit.toFixed(2)}</span></div>
                             </div>
-                             <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+                            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
                                 <div className="flex items-center gap-4 mb-2"><div className="p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl"><Activity size={24} /></div><div><div className="text-xs font-bold text-gray-400 uppercase">Failed Jobs</div><div className="text-2xl font-black text-gray-900 dark:text-white">{stats.totalFailed}</div></div></div>
-                                 <div className="text-xs text-red-500 font-medium">Rate: {((stats.totalFailed / stats.totalCount) * 100 || 0).toFixed(1)}%</div>
+                                <div className="text-xs text-red-500 font-medium">Rate: {((stats.totalFailed / stats.totalCount) * 100 || 0).toFixed(1)}%</div>
                             </div>
                         </div>
                     </div>
@@ -229,8 +290,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                 {activeTab === 'USERS' && (
                     <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm animate-in fade-in duration-300">
                         <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 flex items-center justify-between">
-                             <div className="relative"><Search className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setUsersPage(1); }} className="pl-9 pr-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 w-64 text-gray-900 dark:text-white"/></div>
-                             <div className="text-xs font-bold text-gray-500 uppercase tracking-wide">{filteredUsers.length} Users</div>
+                            <div className="relative"><Search className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setUsersPage(1); }} className="pl-9 pr-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 w-64 text-gray-900 dark:text-white" /></div>
+                            <div className="text-xs font-bold text-gray-500 uppercase tracking-wide">{filteredUsers.length} Users</div>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm text-left text-gray-600 dark:text-gray-300">
@@ -258,7 +319,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                 {activeTab === 'ACTIVITY' && (
                     <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm animate-in fade-in duration-300">
                         <div className="p-4 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 flex items-center justify-between">
-                             <div className="relative"><Search className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" placeholder="Search projects..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setActivityPage(1); }} className="pl-9 pr-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 w-64 text-gray-900 dark:text-white"/></div>
+                            <div className="relative"><Search className="absolute left-3 top-2.5 text-gray-400" size={16} /><input type="text" placeholder="Search projects..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setActivityPage(1); }} className="pl-9 pr-4 py-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 w-64 text-gray-900 dark:text-white" /></div>
                         </div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm text-left text-gray-600 dark:text-gray-300">
@@ -301,7 +362,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ initialTab = 'OV
                         <PaginationControls totalItems={filteredProjects.length} currentPage={activityPage} onPageChange={setActivityPage} />
                     </div>
                 )}
-                
+
                 {selectedMedia && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 p-4 animate-in fade-in duration-200">
                         <div className="relative w-full max-w-5xl bg-black rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">

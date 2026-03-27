@@ -43,7 +43,7 @@ export interface Template {
   variables: TemplateVariable[];
   defaultAvatarId?: string;
   defaultVoiceId?: string;
-  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE'; 
+  mode?: 'AVATAR' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
 }
 
 export interface Project {
@@ -53,10 +53,10 @@ export interface Project {
   thumbnailUrl: string;
   status: ProjectStatus;
   createdAt: number;
-  videoUrl?: string; 
+  videoUrl?: string;
   error?: string;
-  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE'; 
-  cost?: number; 
+  type?: 'AVATAR' | 'UGC_PRODUCT' | 'TEXT_TO_VIDEO' | 'FASHION_SHOOT' | 'SHORTS' | 'STORYBOOK' | 'AUDIOBOOK' | 'IMAGE_TO_VIDEO' | 'TEXT_TO_IMAGE' | 'IMAGE_TO_IMAGE';
+  cost?: number;
   user_email?: string;
   metadata?: any; // Stores manifest, scenes, prompts etc.
 }
@@ -99,14 +99,14 @@ export interface ScriptGenerationRequest {
 // --- ShortMaker Types ---
 
 export interface ShortMakerOutputSettings {
-  video_resolution: string; 
+  video_resolution: string;
   fps: number;
   scene_duration_default: number;
   visual_source?: 'AI' | 'PEXELS';
   animation?: 'ZOOM' | 'PAN' | 'STATIC';
   captions?: {
-      enabled: boolean;
-      style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
+    enabled: boolean;
+    style: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT';
   };
 }
 
@@ -135,7 +135,8 @@ export interface ShortMakerScene {
   generated_image_url?: string;
   generated_image_seed?: string;
   generated_audio_url?: string;
-  generated_video_url?: string; 
+  generated_video_url?: string;
+  media_type?: 'image' | 'video';
 }
 
 export interface ShortMakerManifest {
@@ -173,13 +174,13 @@ export interface IntegrationStatus {
 // --- CENTRALIZED COST CONFIGURATION ---
 // Base assumption: 1 Credit = $0.10 USD
 export const APP_COSTS = {
-    AVATAR_VIDEO: 30,      // Provider: ~$2.00 -> Price: $3.00
-    VEO_FAST: 8,           // Provider: ~$0.50 -> Price: $0.80
-    VEO_PRO: 23,           // Provider: ~$1.50 -> Price: $2.30
-    UGC_MULTI: 24,         // Provider: ~$1.60 -> Price: $2.40
-    FASHION: 2,            // Provider: ~$0.10 -> Price: $0.20
-    AUDIOBOOK: 5,          // Provider: ~$0.30 -> Price: $0.50
-    SHORTS_15S: 5,         // Provider: ~$0.32 -> Price: $0.50
-    SHORTS_30S: 9,         // Provider: ~$0.54 -> Price: $0.90
-    SHORTS_60S: 16         // Provider: ~$1.03 -> Price: $1.60
+  AVATAR_VIDEO: 30,      // Provider: ~$2.00 -> Price: $3.00
+  VEO_FAST: 8,           // Provider: ~$0.50 -> Price: $0.80
+  VEO_PRO: 23,           // Provider: ~$1.50 -> Price: $2.30
+  UGC_MULTI: 24,         // Provider: ~$1.60 -> Price: $2.40
+  FASHION: 2,            // Provider: ~$0.10 -> Price: $0.20
+  AUDIOBOOK: 5,          // Provider: ~$0.30 -> Price: $0.50
+  SHORTS_15S: 5,         // Provider: ~$0.32 -> Price: $0.50
+  SHORTS_30S: 9,         // Provider: ~$0.54 -> Price: $0.90
+  SHORTS_60S: 16         // Provider: ~$1.03 -> Price: $1.60
 };

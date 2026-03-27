@@ -1,14 +1,17 @@
 
-import { supabase, isSupabaseConfigured } from '../supabaseClient';
+
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage, auth } from '../firebase';
+import { proxyAsset } from './geminiService';
 
 export const uploadToStorage = async (
-    blobOrUrl: Blob | string, 
-    fileName: string, 
+    blobOrUrl: Blob | string,
+    fileName: string,
     folder: string = 'uploads'
 ): Promise<string> => {
-    // If Supabase isn't configured, we just return the original URL (likely a Blob URL or Data URI)
-    if (!isSupabaseConfigured()) {
-        console.warn("Supabase Storage not configured. Returning temporary URL.");
+    // If Firebase Storage isn't initialized, we fallback
+    if (!storage) {
+        console.warn("Firebase Storage not initialized. Returning temporary URL.");
         if (typeof blobOrUrl === 'string') return blobOrUrl;
         return URL.createObjectURL(blobOrUrl);
     }
@@ -18,16 +21,14 @@ export const uploadToStorage = async (
 
         // 1. Convert input to Blob if it's a URL
         if (typeof blobOrUrl === 'string') {
-            if (blobOrUrl.startsWith('blob:')) {
-                const res = await fetch(blobOrUrl);
-                blobToUpload = await res.blob();
-            } else if (blobOrUrl.startsWith('data:')) {
+            if (blobOrUrl.startsWith('blob:') || blobOrUrl.startsWith('data:')) {
                 const res = await fetch(blobOrUrl);
                 blobToUpload = await res.blob();
             } else {
-                // It's a remote URL. Try to proxy/fetch.
+                // It's a remote URL. Use proxy to avoid CORS.
                 try {
-                    const res = await fetch(blobOrUrl);
+                    const proxiedUrl = await proxyAsset(blobOrUrl);
+                    const res = await fetch(proxiedUrl);
                     if (!res.ok) throw new Error("Failed to fetch remote asset");
                     blobToUpload = await res.blob();
                 } catch (e) {
@@ -40,44 +41,38 @@ export const uploadToStorage = async (
         }
 
         // 2. Get User ID for secure folder structure
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-        if (userError || !user) {
+        const user = auth.currentUser;
+        if (!user) {
             throw new Error("User not authenticated for upload");
         }
 
-        const filePath = `${user.id}/${folder}/${Date.now()}_${fileName}`;
-        
-        // Determine content type based on extension or folder
+        const filePath = `${user.uid}/${folder}/${Date.now()}_${fileName}`;
+
+        // Determine content type
         let contentType = 'application/octet-stream';
         if (fileName.endsWith('.mp4') || fileName.endsWith('.webm') || folder === 'stories' || folder === 'videos') {
-            contentType = 'video/mp4'; // FORCE MP4 Header
+            contentType = 'video/mp4';
         } else if (fileName.endsWith('.png') || fileName.endsWith('.jpg') || folder === 'fashion') {
             contentType = 'image/png';
         }
 
-        // 3. Upload to Supabase
-        const { error: uploadError } = await supabase.storage
-            .from('assets')
-            .upload(filePath, blobToUpload, {
-                cacheControl: '3600',
-                upsert: false,
-                contentType: contentType
-            });
+        // 3. Upload to Firebase Storage
+        const storageRef = ref(storage, filePath);
+        const metadata = {
+            contentType: contentType,
+        };
 
-        if (uploadError) throw uploadError;
+        const uploadResult = await uploadBytes(storageRef, blobToUpload, metadata);
 
-        // 4. Get Public URL
-        const { data: { publicUrl } } = supabase.storage
-            .from('assets')
-            .getPublicUrl(filePath);
+        // 4. Get Download URL
+        const publicUrl = await getDownloadURL(uploadResult.ref);
 
         return publicUrl;
 
     } catch (error) {
         console.warn("Storage Upload Failed (Returning local fallback):", error);
-        // Fallback: If upload fails (e.g. not logged in), return a local Object URL
-        // This ensures the user can still download/view the result in the current session.
         if (typeof blobOrUrl === 'string') return blobOrUrl;
         return URL.createObjectURL(blobOrUrl);
     }
 };
+
