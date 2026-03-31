@@ -182,7 +182,8 @@ export const ChannelMaker: React.FC<ChannelMakerProps> = ({ userCredits, onBack,
                 // Show this episode's scenes on the right panel
                 setActiveSceneEpisode(ep.id);
 
-                const videoUrl = await runEpisodicProduction({
+                // 185:
+                const result = await runEpisodicProduction({
                     channel,
                     episode: ep,
                     onProgress: (msg) => {
@@ -200,15 +201,21 @@ export const ChannelMaker: React.FC<ChannelMakerProps> = ({ userCredits, onBack,
                     }
                 });
 
-                const permanentUrl = await uploadToStorage(videoUrl, `ep_${ep.id}.mp4`, 'episodes');
-                updateEpProgress(ep.id, { step: '☁️ Uploading...', percent: 97, lastLog: 'Uploading to storage...' });
+                const { videoUrl, manifest } = (typeof result === 'string')
+                    ? { videoUrl: result, manifest: ep.manifest }
+                    : result;
 
+                updateEpProgress(ep.id, { step: '☁️ Uploading...', percent: 97, lastLog: 'Uploading to storage...' });
+                const permanentUrl = await uploadToStorage(videoUrl, `ep_${ep.id}.mp4`, 'episodes');
+
+                updateEpProgress(ep.id, { step: '💾 Saving...', percent: 98, lastLog: 'Updating project metadata...' });
                 await onGenerate({
                     isDirectSave: true,
                     videoUrl: permanentUrl,
-                    thumbnailUrl: '',
+                    thumbnailUrl: manifest.scenes?.[0]?.generated_image_url || '',
                     cost: 9,
                     templateName: `${channel.name} - ${ep.title}`,
+                    manifest: manifest, // <--- Correctly passing the manifest now
                     type: 'SHORTS',
                     channelId: channel.id,
                     episodeId: ep.id,
@@ -217,6 +224,7 @@ export const ChannelMaker: React.FC<ChannelMakerProps> = ({ userCredits, onBack,
 
                 let youtubeId = '';
                 if (channel.connected && channel.accessToken) {
+                    updateEpProgress(ep.id, { step: '🚀 Publishing...', percent: 99, lastLog: 'Uploading to YouTube...' });
                     try {
                         youtubeId = await uploadToYouTube(
                             channel.accessToken,
@@ -236,6 +244,7 @@ export const ChannelMaker: React.FC<ChannelMakerProps> = ({ userCredits, onBack,
                         ...e,
                         status: 'completed' as const,
                         videoUrl: permanentUrl,
+                        manifest: manifest,
                         youtubeVideoId: youtubeId || e.youtubeVideoId
                     } : e)
                 }));
@@ -627,50 +636,98 @@ export const ChannelMaker: React.FC<ChannelMakerProps> = ({ userCredits, onBack,
                                                             {displayEp ? displayEp.title : 'Scene Preview'}
                                                         </h3>
                                                         <p className="text-xs text-gray-400 font-medium mt-0.5">
-                                                            {displayScenes.length > 0 ? `${displayScenes.length} of ~${displayScenes[0]?.total || '?'} scenes rendered` : 'Waiting for first scene...'}
+                                                            {displayEp?.status === 'completed'
+                                                                ? '✨ Production Complete'
+                                                                : displayScenes.length > 0 ? `${displayScenes.length} of ~${displayScenes[0]?.total || '?'} scenes rendered` : 'Waiting for first scene...'}
                                                         </p>
                                                     </div>
-                                                    {displayScenes.length > 0 && (
+                                                    {displayEp?.status === 'completed' ? (
+                                                        <span className="text-xs font-black text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                                                            <CheckCircle size={14} />
+                                                            Ready
+                                                        </span>
+                                                    ) : displayScenes.length > 0 && (
                                                         <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 px-3 py-1.5 rounded-full">
                                                             🎨 Live
                                                         </span>
                                                     )}
                                                 </div>
 
-                                                <div className="grid grid-cols-3 gap-3">
-                                                    {/* Rendered scenes */}
-                                                    {displayScenes.map((sc) => (
-                                                        <div key={sc.index} className="relative rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-900 aspect-[9/16] group animate-in zoom-in duration-500">
-                                                            <img
-                                                                src={sc.imageUrl}
-                                                                alt={`Scene ${sc.index + 1}`}
-                                                                className="w-full h-full object-cover"
+                                                {displayEp?.status === 'completed' && displayEp.videoUrl ? (
+                                                    <div className="space-y-6">
+                                                        <div className="relative rounded-[2rem] overflow-hidden bg-black aspect-[9/16] shadow-2xl group border-4 border-white dark:border-gray-700 animate-in zoom-in duration-500">
+                                                            <video
+                                                                src={displayEp.videoUrl}
+                                                                controls
+                                                                autoPlay
+                                                                className="w-full h-full object-contain"
                                                             />
-                                                            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <div className="absolute bottom-0 left-0 right-0 p-3">
-                                                                    <span className="text-[9px] font-black text-white/80 uppercase tracking-widest block mb-1">Scene {sc.index + 1}</span>
-                                                                    <p className="text-white text-[10px] font-medium leading-tight line-clamp-3">{sc.narration}</p>
+                                                            <div className="absolute top-4 right-4 z-10">
+                                                                <div className="flex items-center gap-2 px-3 py-1.5 bg-black/60 backdrop-blur-md rounded-full text-[10px] font-black text-white uppercase tracking-widest">
+                                                                    <Play size={10} fill="currentColor" />
+                                                                    Final Render
                                                                 </div>
                                                             </div>
-                                                            <div className="absolute top-2 left-2 w-6 h-6 bg-black/50 backdrop-blur-sm rounded-full flex items-center justify-center">
-                                                                <span className="text-white text-[9px] font-black">{sc.index + 1}</span>
-                                                            </div>
                                                         </div>
-                                                    ))}
-                                                    {/* Placeholder slots for upcoming scenes */}
-                                                    {displayScenes.length < placeholderCount && Array.from({ length: Math.min(placeholderCount - displayScenes.length, 9) }).map((_, i) => (
-                                                        <div key={`ph-${i}`} className="bg-gray-100 dark:bg-gray-900/60 rounded-2xl aspect-[9/16] flex items-center justify-center border-2 border-dashed border-gray-200 dark:border-gray-700">
-                                                            {i === 0 && displayEp?.status === 'processing' ? (
-                                                                <div className="text-center">
-                                                                    <Loader2 size={20} className="animate-spin text-indigo-400 mx-auto mb-2" />
-                                                                    <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Painting</span>
+
+                                                        {displayEp.youtubeVideoId && (
+                                                            <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl p-4 flex items-center justify-between border border-indigo-100 dark:border-indigo-900/30">
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className="p-2 bg-red-600 rounded-lg text-white">
+                                                                        <Youtube size={16} />
+                                                                    </div>
+                                                                    <div>
+                                                                        <div className="text-[11px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">Live on YouTube</div>
+                                                                        <div className="text-xs font-bold text-gray-500">Video ID: {displayEp.youtubeVideoId}</div>
+                                                                    </div>
                                                                 </div>
-                                                            ) : (
-                                                                <ImageIcon size={20} className="text-gray-300 dark:text-gray-700" />
-                                                            )}
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                                                <a
+                                                                    href={`https://youtube.com/watch?v=${displayEp.youtubeVideoId}`}
+                                                                    target="_blank"
+                                                                    rel="noopener noreferrer"
+                                                                    className="px-4 py-2 bg-white dark:bg-gray-800 text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-gray-50 transition-colors shadow-sm"
+                                                                >
+                                                                    Watch
+                                                                </a>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="grid grid-cols-3 gap-3">
+                                                        {/* Rendered scenes */}
+                                                        {displayScenes.map((sc) => (
+                                                            <div key={sc.index} className="relative rounded-2xl overflow-hidden bg-gray-100 dark:bg-gray-900 aspect-[9/16] group animate-in zoom-in duration-500">
+                                                                <img
+                                                                    src={sc.imageUrl}
+                                                                    alt={`Scene ${sc.index + 1}`}
+                                                                    className="w-full h-full object-cover"
+                                                                />
+                                                                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    <div className="absolute bottom-0 left-0 right-0 p-3">
+                                                                        <span className="text-[9px] font-black text-white/80 uppercase tracking-widest block mb-1">Scene {sc.index + 1}</span>
+                                                                        <p className="text-white text-[10px] font-medium leading-tight line-clamp-3">{sc.narration}</p>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="absolute top-2 left-2 w-6 h-6 bg-black/50 backdrop-blur-sm rounded-full flex items-center justify-center">
+                                                                    <span className="text-white text-[9px] font-black">{sc.index + 1}</span>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                        {/* Placeholder slots for upcoming scenes */}
+                                                        {displayScenes.length < placeholderCount && Array.from({ length: Math.min(placeholderCount - displayScenes.length, 9) }).map((_, i) => (
+                                                            <div key={`ph-${i}`} className="bg-gray-100 dark:bg-gray-900/60 rounded-2xl aspect-[9/16] flex items-center justify-center border-2 border-dashed border-gray-200 dark:border-gray-700">
+                                                                {i === 0 && displayEp?.status === 'processing' ? (
+                                                                    <div className="text-center">
+                                                                        <Loader2 size={20} className="animate-spin text-indigo-400 mx-auto mb-2" />
+                                                                        <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Painting</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    <ImageIcon size={20} className="text-gray-300 dark:text-gray-700" />
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
 
                                                 {displayScenes.length === 0 && !displayEp && (
                                                     <div className="flex flex-col items-center justify-center h-80 text-center">

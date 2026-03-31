@@ -503,7 +503,7 @@ export const runEpisodicProduction = async ({ channel, episode, onProgress, onSc
         const videoUrl = await assembleVideo(manifest);
 
         log("Production complete!");
-        return videoUrl;
+        return { videoUrl, manifest };
 
     } catch (e: any) {
         log(`Error: ${e.message}`);
