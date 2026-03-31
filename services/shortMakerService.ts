@@ -435,3 +435,78 @@ export const assembleVideo = async (manifest: ShortMakerManifest, backgroundMusi
         );
     }
 };
+// ==========================================
+// 5. EPISODIC PRODUCTION (HEADLESS)
+// ==========================================
+
+export interface EpisodicProductionRequest {
+    channel: any; // YouTubeChannel
+    episode: any; // YouTubeEpisode
+    onProgress?: (msg: string) => void;
+    onSceneReady?: (sceneIndex: number, imageUrl: string, narration: string, total: number) => void;
+}
+
+export const runEpisodicProduction = async ({ channel, episode, onProgress, onSceneReady }: EpisodicProductionRequest): Promise<string> => {
+    const log = (msg: string) => {
+        console.log(`[EpisodicProd] ${msg}`);
+        if (onProgress) onProgress(msg);
+    };
+
+    try {
+        // 1. Generate Manifest if missing
+        let manifest = episode.manifest;
+        if (!manifest) {
+            log(`Dreaming up script for: ${episode.title}...`);
+            manifest = await generateStory({
+                idea: `${channel.name} - ${episode.title}: ${episode.description}`,
+                style_tone: channel.style || 'Cinematic',
+                mode: 'SHORTS',
+                durationTier: '30s',
+                aspectRatio: '9:16',
+                voice_preference: { voice: 'Fenrir' }
+            });
+        }
+
+        const generationSeed = manifest.seed || Math.random().toString();
+        const workingScenes = [...manifest.scenes];
+
+        // 2. Generate Visuals
+        log(`Generating ${workingScenes.length} scenes...`);
+        for (let i = 0; i < workingScenes.length; i++) {
+            const scene = workingScenes[i];
+            if (!scene.generated_image_url) {
+                log(`Painting scene ${i + 1}/${workingScenes.length}...`);
+                const result = await generateSceneImage(
+                    scene,
+                    generationSeed,
+                    channel.style,
+                    '9:16',
+                    'nano_banana',
+                    'AI'
+                );
+                workingScenes[i].generated_image_url = result.url;
+                workingScenes[i].media_type = result.type;
+                // Notify caller so the scene grid can update live
+                if (onSceneReady) {
+                    onSceneReady(i, result.url, scene.narration_text || '', workingScenes.length);
+                }
+            }
+        }
+        manifest.scenes = workingScenes;
+
+        // 3. Synthesize Audio
+        log("Synthesizing voiceover...");
+        manifest = await synthesizeAudio(manifest, undefined, 'Fenrir');
+
+        // 4. Assemble
+        log("Assembling final video...");
+        const videoUrl = await assembleVideo(manifest);
+
+        log("Production complete!");
+        return videoUrl;
+
+    } catch (e: any) {
+        log(`Error: ${e.message}`);
+        throw e;
+    }
+};

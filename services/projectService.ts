@@ -15,7 +15,7 @@ import {
   runTransaction,
   onSnapshot
 } from 'firebase/firestore';
-import { Project, ProjectStatus } from '../types';
+import { Project, ProjectStatus, YouTubeChannel, YouTubeEpisode } from '../types';
 import { triggerWebhook } from './webhookService';
 
 // Added missing cache variables
@@ -140,6 +140,38 @@ const saveToLocalStorage = (project: Project) => {
   saveLocalProjects(projects);
 };
 
+// --- Channel Local Storage ---
+const CHANNEL_STORAGE_KEY = 'loopgenie_channels';
+
+const getLocalChannels = (): YouTubeChannel[] => {
+  try {
+    const stored = localStorage.getItem(CHANNEL_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error("[ProjectService] Failed to read channels from LocalStorage:", e);
+    return [];
+  }
+};
+
+const saveLocalChannels = (channels: YouTubeChannel[]) => {
+  try {
+    localStorage.setItem(CHANNEL_STORAGE_KEY, JSON.stringify(channels));
+  } catch (e) {
+    console.error("[ProjectService] LocalStorage channel save failed:", e);
+  }
+};
+
+const saveChannelToLocalStorage = (channel: YouTubeChannel) => {
+  const channels = getLocalChannels();
+  const index = channels.findIndex(c => c.id === channel.id);
+  if (index >= 0) {
+    channels[index] = { ...channels[index], ...channel };
+  } else {
+    channels.unshift(channel);
+  }
+  saveLocalChannels(channels);
+};
+
 // --- Webhook Helper ---
 const getUserWebhookUrl = async (userId: string): Promise<string | undefined> => {
   const localUrl = localStorage.getItem('loopgenie_webhook_url') || undefined;
@@ -167,20 +199,30 @@ export const fetchProjects = async (): Promise<{ projects: Project[], error?: an
 
   try {
     const user = auth.currentUser;
-    if (!user) return { projects: [] };
+    if (!user) {
+      const localData = getLocalProjects();
+      return { projects: localData.map(row => mapRowToProject(row.id, row)) };
+    }
 
-    const q = query(
-      collection(db, 'projects'),
-      where('user_id', '==', user.uid),
-      orderBy('created_at', 'desc'),
-      limit(50)
-    );
-
-    const querySnapshot = await getDocs(q);
-    const projects: Project[] = [];
-    querySnapshot.forEach((doc) => {
-      projects.push(mapRowToProject(doc.id, doc.data()));
-    });
+    // Try indexed query first; fall back to simple query + client-side sort if index is missing
+    let projects: Project[] = [];
+    try {
+      const q = query(
+        collection(db, 'projects'),
+        where('user_id', '==', user.uid),
+        orderBy('created_at', 'desc'),
+        limit(50)
+      );
+      const snap = await getDocs(q);
+      snap.forEach(d => projects.push(mapRowToProject(d.id, d.data())));
+    } catch (indexErr: any) {
+      // Missing index -- fall back to filterOnly query, sort client-side
+      console.warn('[ProjectService] Falling back to simple query (index may be missing):', indexErr?.message);
+      const q2 = query(collection(db, 'projects'), where('user_id', '==', user.uid), limit(50));
+      const snap2 = await getDocs(q2);
+      snap2.forEach(d => projects.push(mapRowToProject(d.id, d.data())));
+      projects.sort((a, b) => b.createdAt - a.createdAt);
+    }
 
     return { projects };
   } catch (err) {
@@ -190,35 +232,118 @@ export const fetchProjects = async (): Promise<{ projects: Project[], error?: an
   }
 };
 
-export const subscribeToProjects = (callback: (projects: Project[]) => void) => {
+export const subscribeToProjects = (userIdOrCallback: string | ((projects: Project[]) => void), maybeCallback?: (projects: Project[]) => void) => {
+  const userId = typeof userIdOrCallback === 'string' ? userIdOrCallback : auth.currentUser?.uid;
+  const callback = typeof userIdOrCallback === 'function' ? userIdOrCallback : maybeCallback;
+
+  if (!callback) return () => { };
+
   if (!isFirebaseConfigured()) {
     const localData = getLocalProjects();
     callback(localData.map(row => mapRowToProject(row.id, row)));
     return () => { };
   }
 
-  const user = auth.currentUser;
-  if (!user) {
+  if (!userId) {
     callback([]);
     return () => { };
   }
 
-  const q = query(
+  // Try the indexed query (user_id + created_at). If it fails due to a missing index,
+  // fall back to a simple query and sort client-side.
+  const indexedQ = query(
     collection(db, 'projects'),
-    where('user_id', '==', user.uid),
+    where('user_id', '==', userId),
     orderBy('created_at', 'desc'),
     limit(50)
   );
 
-  return onSnapshot(q, (querySnapshot) => {
+  const unsub = onSnapshot(indexedQ, (querySnapshot) => {
     const projects: Project[] = [];
     querySnapshot.forEach((doc) => {
       projects.push(mapRowToProject(doc.id, doc.data()));
     });
     callback(projects);
-  }, (err) => {
-    console.warn("Project subscription error:", err);
+  }, (err: any) => {
+    console.warn('[ProjectService] Indexed subscription failed, falling back to simple query:', err?.message);
+    // Unsub from failed listener and retry without orderBy
+    unsub();
+    const simpleQ = query(collection(db, 'projects'), where('user_id', '==', userId), limit(50));
+    onSnapshot(simpleQ, (snap) => {
+      const projects: Project[] = [];
+      snap.forEach(d => projects.push(mapRowToProject(d.id, d.data())));
+      projects.sort((a, b) => b.createdAt - a.createdAt);
+      callback(projects);
+    }, (err2) => {
+      console.warn('[ProjectService] Simple subscription also failed:', err2);
+      // Final fallback: local storage
+      callback(getLocalProjects().map(row => mapRowToProject(row.id, row)));
+    });
   });
+
+  return unsub;
+};
+
+// --- YouTube Channel Persistence ---
+
+export const saveChannel = async (channel: YouTubeChannel) => {
+  if (!isFirebaseConfigured()) {
+    saveChannelToLocalStorage(channel);
+    return;
+  }
+
+  try {
+    await setDoc(doc(db, 'channels', channel.id), channel, { merge: true });
+  } catch (error) {
+    console.error("Save Channel Firestore Error:", error);
+    saveChannelToLocalStorage(channel);
+  }
+};
+
+export const subscribeToChannels = (userId: string, callback: (channels: YouTubeChannel[]) => void) => {
+  if (!isFirebaseConfigured()) {
+    callback([]);
+    return () => { };
+  }
+
+  const indexedQ = query(
+    collection(db, 'channels'),
+    where('userId', '==', userId),
+    orderBy('createdAt', 'desc')
+  );
+
+  const unsub = onSnapshot(indexedQ, (querySnapshot) => {
+    const channels: YouTubeChannel[] = [];
+    querySnapshot.forEach((doc) => {
+      channels.push(doc.data() as YouTubeChannel);
+    });
+    callback(channels);
+  }, (err: any) => {
+    console.warn('[ProjectService] Channel indexed subscription failed, falling back:', err?.message);
+    unsub();
+    const simpleQ = query(collection(db, 'channels'), where('userId', '==', userId));
+    onSnapshot(simpleQ, (snap) => {
+      const channels: YouTubeChannel[] = [];
+      snap.forEach(d => channels.push(d.data() as YouTubeChannel));
+      channels.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(channels);
+    }, (err2) => {
+      console.warn('[ProjectService] Simple channel subscription failed:', err2);
+      callback(getLocalChannels());
+    });
+  });
+
+  return unsub;
+};
+
+export const getChannel = async (channelId: string): Promise<YouTubeChannel | null> => {
+  if (!isFirebaseConfigured()) return null;
+  try {
+    const docSnap = await getDoc(doc(db, 'channels', channelId));
+    return docSnap.exists() ? docSnap.data() as YouTubeChannel : null;
+  } catch (e) {
+    return null;
+  }
 };
 
 export const subscribeToAllProjectsAdmin = (callback: (projects: Project[]) => void) => {

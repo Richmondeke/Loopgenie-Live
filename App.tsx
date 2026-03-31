@@ -12,9 +12,11 @@ import { UpgradeModal } from './components/UpgradeModal';
 import { AdminDashboard } from './components/AdminDashboard';
 import { Integrations } from './components/Integrations';
 import { Onboarding } from './components/Onboarding';
-import { AppView, Template, Project, ProjectStatus } from './types';
+import { ChannelMaker } from './components/ChannelMaker';
+import { ChannelList } from './components/ChannelList';
+import { AppView, Template, Project, ProjectStatus, YouTubeChannel, YouTubeEpisode } from './types';
 import { generateVideo, checkVideoStatus, getAvatars, getVoices } from './services/heygenService';
-import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits, subscribeToProjects } from './services/projectService';
+import { fetchProjects, saveProject, updateProjectStatus, deductCredits, refundCredits, addCredits, subscribeToProjects, subscribeToChannels, saveChannel } from './services/projectService';
 import { signOut, getSession, onAuthStateChange, getUserProfile, isUserAdmin, subscribeToUserProfile } from './services/authService';
 import { Menu, Loader2, AlertTriangle, ShieldCheck, LayoutDashboard } from 'lucide-react';
 import { DEFAULT_HEYGEN_API_KEY } from './constants';
@@ -38,8 +40,11 @@ const App: React.FC = () => {
     const [galleryInitialView, setGalleryInitialView] = useState<'DASHBOARD' | 'AVATAR_SELECT'>('DASHBOARD');
 
     const [projects, setProjects] = useState<Project[]>([]);
+    const [channels, setChannels] = useState<YouTubeChannel[]>([]);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+
+    const [selectedChannel, setSelectedChannel] = useState<YouTubeChannel | null>(null);
 
     const [heyGenKey, setHeyGenKey] = useState(localStorage.getItem(STORAGE_KEY_HEYGEN) || DEFAULT_HEYGEN_API_KEY);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -118,6 +123,35 @@ const App: React.FC = () => {
             clearTimeout(authTimeout);
         });
 
+        // Handle YouTube OAuth Redirect
+        if (window.location.hash && session?.user?.uid) {
+            const params = new URLSearchParams(window.location.hash.substring(1));
+            const accessToken = params.get('access_token');
+            const state = params.get('state');
+
+            if (accessToken && state === 'youtube_connect') {
+                import('./services/youtubeService').then(({ getChannelInfo }) => {
+                    getChannelInfo(accessToken).then(info => {
+                        // Find the channel we were connecting (could use a temp ID in localStorage)
+                        // For simplicity, let's update the active selectedChannel
+                        if (selectedChannel) {
+                            const updated = {
+                                ...selectedChannel,
+                                connected: true,
+                                accessToken,
+                                ...info
+                            };
+                            setSelectedChannel(updated);
+                            saveChannel(updated);
+                            alert(`Connected to YouTube: ${info.name}`);
+                        }
+                    }).catch(e => console.error("YouTube Fetch Error", e));
+                });
+                // Clean up URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            }
+        }
+
         const { data } = onAuthStateChange((event, session) => {
             console.log("Auth Event:", event);
             if (!mounted) return;
@@ -160,13 +194,18 @@ const App: React.FC = () => {
             }
         });
 
-        const unsubProjects = subscribeToProjects((loaded) => {
+        const unsubProjects = subscribeToProjects(session.user.uid, (loaded) => {
             setProjects(loaded);
+        });
+
+        const unsubChannels = subscribeToChannels(session.user.uid, (loaded) => {
+            setChannels(loaded);
         });
 
         return () => {
             unsubProfile();
             unsubProjects();
+            unsubChannels();
         };
     }, [session?.user?.uid]);
 
@@ -300,7 +339,8 @@ const App: React.FC = () => {
     };
 
     const handleGenerate = async (data: any) => {
-        if (!selectedTemplate || !session) return;
+        if (!session) return;
+        if (!data.isDirectSave && !selectedTemplate) return;
 
         const cost = data.cost || 1;
         if (userCredits < cost) {
@@ -330,15 +370,19 @@ const App: React.FC = () => {
             if (data.isDirectSave) {
                 newProject = {
                     id: `${idPrefix}${Date.now()}`,
-                    templateId: selectedTemplate.id,
-                    templateName: data.templateName || selectedTemplate.name,
+                    templateId: selectedTemplate?.id || 'manual',
+                    templateName: data.templateName || selectedTemplate?.name || 'Untitled',
                     thumbnailUrl: data.thumbnailUrl || 'https://via.placeholder.com/640x360?text=Project',
                     videoUrl: data.videoUrl,
                     status: ProjectStatus.COMPLETED,
                     createdAt: Date.now(),
                     type: data.type || 'UGC_PRODUCT',
                     cost: cost,
-                    metadata: data.manifest // SAVE METADATA
+                    metadata: {
+                        ...data.manifest,
+                        channelId: data.channelId,
+                        episodeId: data.episodeId
+                    }
                 };
             } else {
                 const jobId = await generateVideo(
@@ -358,7 +402,11 @@ const App: React.FC = () => {
                     createdAt: Date.now(),
                     type: 'AVATAR',
                     cost: cost,
-                    metadata: data.manifest
+                    metadata: {
+                        ...data.manifest,
+                        channelId: data.channelId,
+                        episodeId: data.episodeId
+                    }
                 };
             }
 
@@ -465,6 +513,30 @@ const App: React.FC = () => {
                 return <div className="flex items-center justify-center h-full text-gray-400">Assets Management (Coming Soon)</div>;
             case AppView.HELP:
                 return <div className="flex items-center justify-center h-full text-gray-400">Documentation & Help (Coming Soon)</div>;
+            case AppView.CHANNEL_MAKER:
+                return (
+                    <ChannelMaker
+                        userCredits={userCredits}
+                        onBack={() => setCurrentView(selectedChannel ? AppView.SERIES : AppView.TEMPLATES)}
+                        onGenerate={handleGenerate}
+                        onSaveChannel={saveChannel}
+                        initialChannel={selectedChannel}
+                    />
+                );
+            case AppView.SERIES:
+                return (
+                    <ChannelList
+                        channels={channels}
+                        onEditChannel={(channel) => {
+                            setSelectedChannel(channel);
+                            setCurrentView(AppView.CHANNEL_MAKER);
+                        }}
+                        onCreateChannel={() => {
+                            setSelectedChannel(null);
+                            setCurrentView(AppView.CHANNEL_MAKER);
+                        }}
+                    />
+                );
             default:
                 return <TemplateGallery onSelectTemplate={handleSelectTemplate} heyGenKey={heyGenKey} />;
         }

@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle, ShieldCheck, Users, Sun, Moon, Share2 } from 'lucide-react';
+import { LayoutTemplate, Video, FolderOpen, Settings, HelpCircle, Upload, LogOut, Coins, PlusCircle, ShieldCheck, Users, Sun, Moon, Share2, Layout, Youtube } from 'lucide-react';
 import { AppView } from '../types';
 
 interface SidebarProps {
@@ -11,7 +11,7 @@ interface SidebarProps {
   onSignOut?: () => void;
   credits: number;
   onOpenUpgrade: () => void;
-  isAdmin?: boolean; 
+  isAdmin?: boolean;
   isDarkMode?: boolean;
   toggleTheme?: () => void;
 }
@@ -28,11 +28,10 @@ const NavItem: React.FC<{
   return (
     <button
       onClick={() => onClick(view)}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium group relative overflow-hidden ${
-        isActive
-          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
-          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
-      } ${extraClass || ''}`}
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium group relative overflow-hidden ${isActive
+        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-900 dark:hover:text-white'
+        } ${extraClass || ''}`}
     >
       <div className={`relative z-10 flex items-center gap-3`}>
         {React.cloneElement(icon as React.ReactElement, { size: 20, className: isActive ? 'text-white' : 'group-hover:scale-110 transition-transform duration-300' })}
@@ -45,11 +44,11 @@ const NavItem: React.FC<{
 export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isMobileOpen, toggleMobileMenu, onSignOut, credits, onOpenUpgrade, isAdmin, isDarkMode, toggleTheme }) => {
   return (
     <>
-       {/* Mobile Overlay */}
-       {isMobileOpen && (
-        <div 
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-20 md:hidden"
-            onClick={toggleMobileMenu}
+      {/* Mobile Overlay */}
+      {isMobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-20 md:hidden"
+          onClick={toggleMobileMenu}
         />
       )}
 
@@ -57,21 +56,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
         <div className="p-6 flex items-center gap-3">
           <div className="w-10 h-10 flex items-center justify-center">
             <svg viewBox="0 0 100 50" className="w-full h-full drop-shadow-md">
-                <defs>
-                    <linearGradient id="sidebar_grad" x1="0%" y1="0%" x2="100%" y2="0%">
-                        <stop offset="0%" stopColor="#4f46e5" />
-                        <stop offset="100%" stopColor="#9333ea" />
-                    </linearGradient>
-                </defs>
-                <path 
-                    fill="none" 
-                    stroke="url(#sidebar_grad)" 
-                    strokeWidth="10" 
-                    strokeLinecap="round"
-                    className="animate-draw"
-                    strokeDasharray="250"
-                    d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
-                />
+              <defs>
+                <linearGradient id="sidebar_grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#4f46e5" />
+                  <stop offset="100%" stopColor="#9333ea" />
+                </linearGradient>
+              </defs>
+              <path
+                fill="none"
+                stroke="url(#sidebar_grad)"
+                strokeWidth="10"
+                strokeLinecap="round"
+                className="animate-draw"
+                strokeDasharray="250"
+                d="M20,25 C20,5 45,5 50,25 C55,45 80,45 80,25 C80,5 55,5 50,25 C45,45 20,45 20,25 z"
+              />
             </svg>
           </div>
           <h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-white">LoopGenie</h1>
@@ -86,6 +85,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
             current={currentView}
             icon={<LayoutTemplate />}
             label="Templates"
+            onClick={onChangeView}
+          />
+          <NavItem
+            view={AppView.CHANNEL_MAKER}
+            current={currentView}
+            icon={<Video />}
+            label="Channel Maker"
             onClick={onChangeView}
           />
           {/* Assets Removed as requested */}
@@ -152,49 +158,65 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onChangeView, isM
         </nav>
 
         <div className="p-4 border-t border-gray-100 dark:border-gray-800 space-y-3 bg-white dark:bg-gray-950">
-           
-           {toggleTheme && (
-               <button 
-                  onClick={toggleTheme}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors font-medium text-sm border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
-               >
-                  {isDarkMode ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} className="text-indigo-600" />}
-                  <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
-               </button>
-           )}
 
-           {onSignOut && (
-               <button 
-                  onClick={onSignOut}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors font-medium text-sm border border-transparent hover:border-red-100 dark:hover:border-red-900/30"
-               >
-                  <LogOut size={18} />
-                  <span>Sign Out</span>
-               </button>
-           )}
+          {toggleTheme && (
+            <button
+              onClick={toggleTheme}
+              className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors font-medium text-sm border border-transparent hover:border-gray-200 dark:hover:border-gray-700"
+            >
+              {isDarkMode ? <Sun size={18} className="text-amber-400" /> : <Moon size={18} className="text-indigo-600" />}
+              <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
+            </button>
+          )}
 
-           <div className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 rounded-2xl p-5 border border-indigo-100 dark:border-gray-700 shadow-sm relative overflow-hidden group">
-             <div className="flex items-center gap-2 mb-3 relative z-10">
-                <div className="bg-white dark:bg-gray-700 p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400 shadow-sm">
-                    <Coins size={16} />
-                </div>
-                <div className="text-xs text-indigo-900 dark:text-gray-300 font-bold uppercase tracking-wider">Credits Available</div>
-             </div>
-             
-             <div className="flex items-end gap-1 mb-4 relative z-10">
-                <span className="text-3xl font-black text-indigo-600 dark:text-white leading-none">{credits}</span>
-             </div>
+          <button
+            onClick={() => onChangeView(AppView.SERIES)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${currentView === AppView.SERIES ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+          >
+            <Layout size={20} />
+            <span>My Series</span>
+          </button>
 
-             <button 
-                onClick={onOpenUpgrade}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-lg shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 relative z-10"
-             >
-                <PlusCircle size={14} /> Get Credits
-             </button>
-             
-             {/* Decorative shimmer */}
-             <div className="absolute -top-10 -right-10 w-32 h-32 bg-indigo-500/10 dark:bg-indigo-500/20 rounded-full blur-2xl pointer-events-none" />
-           </div>
+          <button
+            onClick={() => onChangeView(AppView.CHANNEL_MAKER)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${currentView === AppView.CHANNEL_MAKER ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+          >
+            <Youtube size={20} />
+            <span>Series Gen</span>
+          </button>
+
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 transition-colors font-medium text-sm border border-transparent hover:border-red-100 dark:hover:border-red-900/30"
+            >
+              <LogOut size={18} />
+              <span>Sign Out</span>
+            </button>
+          )}
+
+          <div className="bg-gradient-to-br from-indigo-50 to-blue-50 dark:from-gray-900 dark:to-gray-800 rounded-2xl p-5 border border-indigo-100 dark:border-gray-700 shadow-sm relative overflow-hidden group">
+            <div className="flex items-center gap-2 mb-3 relative z-10">
+              <div className="bg-white dark:bg-gray-700 p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400 shadow-sm">
+                <Coins size={16} />
+              </div>
+              <div className="text-xs text-indigo-900 dark:text-gray-300 font-bold uppercase tracking-wider">Credits Available</div>
+            </div>
+
+            <div className="flex items-end gap-1 mb-4 relative z-10">
+              <span className="text-3xl font-black text-indigo-600 dark:text-white leading-none">{credits}</span>
+            </div>
+
+            <button
+              onClick={onOpenUpgrade}
+              className="w-full bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white text-xs font-bold py-2.5 rounded-lg shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2 transition-all active:scale-95 relative z-10"
+            >
+              <PlusCircle size={14} /> Get Credits
+            </button>
+
+            {/* Decorative shimmer */}
+            <div className="absolute -top-10 -right-10 w-32 h-32 bg-indigo-500/10 dark:bg-indigo-500/20 rounded-full blur-2xl pointer-events-none" />
+          </div>
         </div>
       </div>
     </>

@@ -7,7 +7,9 @@ export enum AppView {
   HELP = 'HELP',
   ADMIN = 'ADMIN',
   ADMIN_USERS = 'ADMIN_USERS',
-  INTEGRATIONS = 'INTEGRATIONS'
+  INTEGRATIONS = 'INTEGRATIONS',
+  CHANNEL_MAKER = 'CHANNEL_MAKER',
+  SERIES = 'SERIES'
 }
 
 export enum ProjectStatus {
@@ -184,3 +186,40 @@ export const APP_COSTS = {
   SHORTS_30S: 9,         // Provider: ~$0.54 -> Price: $0.90
   SHORTS_60S: 16         // Provider: ~$1.03 -> Price: $1.60
 };
+
+// --- YouTube Channel Maker Types ---
+
+export interface YouTubeEpisode {
+  id: string;
+  title: string;
+  description: string;
+  status: 'pending' | 'approved' | 'processing' | 'completed' | 'failed';
+  manifest?: ShortMakerManifest;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+  createdAt: number;
+  youtubeVideoId?: string;
+  publishedAt?: number;
+  scheduledAt?: number;
+}
+
+export interface YouTubeChannel {
+  id: string;
+  userId: string;
+  name: string;
+  description: string; // The niche/prompt
+  logoUrl?: string;
+  bannerUrl?: string;
+  bio?: string;
+  style?: string;
+  episodes: YouTubeEpisode[];
+  createdAt: number;
+
+  // YouTube Integration
+  youtubeId?: string;
+  youtubeHandle?: string;
+  connected?: boolean;
+  accessToken?: string;
+  refreshToken?: string;
+  expiryDate?: number;
+}

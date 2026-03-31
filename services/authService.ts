@@ -103,10 +103,31 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
         webhook_method: data.webhook_method
       } as UserProfile;
     } else {
-      // If profile doesn't exist, return info from Auth
+      // If profile doesn't exist, create one with default credits
       const user = auth.currentUser;
       const email = user?.email || '';
-      return { id: userId, email, credits_balance: 5, isAdmin: isUserAdmin(email) };
+      const fullName = user?.displayName || '';
+
+      const newProfile = {
+        id: userId,
+        email,
+        full_name: fullName,
+        credits_balance: 5,
+        isAdmin: isUserAdmin(email)
+      };
+
+      try {
+        await setDoc(docRef, {
+          email,
+          full_name: fullName,
+          credits_balance: 5,
+          isAdmin: isUserAdmin(email)
+        });
+      } catch (err) {
+        console.warn("Failed to create default profile in Firestore:", err);
+      }
+
+      return newProfile;
     }
   } catch (err: any) {
     console.error("Unexpected error in getUserProfile:", err.message || err);
