@@ -292,8 +292,22 @@ export const saveChannel = async (channel: YouTubeChannel) => {
     return;
   }
 
+  const user = auth.currentUser;
+  if (!user) {
+    saveChannelToLocalStorage(channel);
+    return;
+  }
+
+  // Ensure channel has the current user ID for ownership
+  const payload = {
+    ...channel,
+    userId: user.uid,
+    userEmail: user.email || ''
+  };
+
   try {
-    await setDoc(doc(db, 'channels', channel.id), channel, { merge: true });
+    console.log(`[ProjectService] Saving channel ${channel.id} for user ${user.uid}`);
+    await setDoc(doc(db, 'channels', channel.id), payload, { merge: true });
   } catch (error) {
     console.error("Save Channel Firestore Error:", error);
     saveChannelToLocalStorage(channel);

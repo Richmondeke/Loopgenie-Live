@@ -1,88 +1,107 @@
 
-import { YouTubeChannel, YouTubeEpisode } from '../types';
+import { db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
-const CLIENT_ID = '793637255587-bkuklfr80enks9qv113l2fsd48h10pug.apps.googleusercontent.com';
-const REDIRECT_URI = window.location.origin; // In production, this must match the Google Console redirect URI
-const SCOPES = [
-    'https://www.googleapis.com/auth/youtube.upload',
-    'https://www.googleapis.com/auth/youtube.readonly'
-].join(' ');
+const FUNCTIONS_BASE_URL = 'https://loopgenie-5c4cf.cloudfunctions.net';
 
 /**
- * YouTube integration service using Google API.
- * Note: Pure client-side OAuth has limitations (token expiry).
- * For production, a backend / Firebase Function is recommended to refresh tokens.
+ * YouTube integration service using Firebase Cloud Functions.
+ * Handles server-side OAuth for long-lived tokens and background uploads.
  */
-export const getYouTubeAuthUrl = () => {
-    const params = new URLSearchParams({
-        client_id: CLIENT_ID,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'token', // Using Implicit Flow for client-side demo
-        scope: SCOPES,
-        include_granted_scopes: 'true',
-        state: 'youtube_connect'
-    });
-    return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-};
-
-export const getChannelInfo = async (accessToken: string) => {
+export const getYouTubeAuthUrl = async (redirectUri?: string) => {
     try {
-        const response = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails&mine=true', {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
+        const response = await fetch(`${FUNCTIONS_BASE_URL}/geminiApi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'get-youtube-auth-url',
+                payload: { redirectUri: redirectUri || `${window.location.origin}/integrations` }
+            })
         });
         const data = await response.json();
-        if (data.items && data.items.length > 0) {
-            const channel = data.items[0];
-            return {
-                youtubeId: channel.id,
-                youtubeHandle: channel.snippet.customUrl || channel.snippet.title,
-                name: channel.snippet.title,
-                logoUrl: channel.snippet.thumbnails.default.url
-            };
-        }
-        throw new Error("No YouTube channel found for this account.");
+        if (data.error) throw new Error(data.error);
+        return data.url;
     } catch (e) {
-        console.error("YouTube Channel Info Error:", e);
+        console.error("Failed to get YouTube Auth URL:", e);
         throw e;
     }
 };
 
-export const uploadToYouTube = async (accessToken: string, videoUrl: string, title: string, description: string) => {
+export const handleYouTubeCallback = async (code: string, userId: string, redirectUri?: string) => {
     try {
-        // 1. Fetch the video blob
-        const videoResponse = await fetch(videoUrl);
-        const videoBlob = await videoResponse.blob();
-
-        // 2. Metadata for the upload
-        const metadata = {
-            snippet: {
-                title: title,
-                description: description,
-                categoryId: '22' // People & Blogs
-            },
-            status: {
-                privacyStatus: 'private' // Default to private for safety
-            }
-        };
-
-        // 3. Multipart upload
-        const formData = new FormData();
-        formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-        formData.append('media', videoBlob);
-
-        const response = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart', {
+        const response = await fetch(`${FUNCTIONS_BASE_URL}/geminiApi`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${accessToken}` },
-            body: formData
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'handle-youtube-callback',
+                payload: {
+                    code,
+                    userId,
+                    redirectUri: redirectUri || `${window.location.origin}/integrations`
+                }
+            })
         });
-
-        const result = await response.json();
-        if (result.id) {
-            return result.id; // Return the YouTube Video ID
-        }
-        throw new Error(result.error?.message || "YouTube upload failed.");
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        return data;
     } catch (e) {
-        console.error("YouTube Upload Error:", e);
+        console.error("YouTube Callback Error:", e);
+        throw e;
+    }
+};
+
+export const uploadToYouTube = async (
+    userId: string,
+    channelId: string,
+    videoUrl: string,
+    title: string,
+    description: string
+) => {
+    try {
+        const response = await fetch(`${FUNCTIONS_BASE_URL}/geminiApi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'publish-youtube-video',
+                payload: {
+                    userId,
+                    channelId,
+                    videoUrl,
+                    title,
+                    description,
+                    privacyStatus: 'public'
+                }
+            })
+        });
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        return data.videoId;
+    } catch (e) {
+        console.error("Direct Upload Error:", e);
+        throw e;
+    }
+};
+
+export const scheduleVideoUpload = async (data: {
+    userId: string;
+    channelId: string;
+    projectId: string;
+    videoUrl: string;
+    title: string;
+    description: string;
+    scheduledAt: Date;
+    privacyStatus?: 'public' | 'private' | 'unlisted';
+}) => {
+    try {
+        const docRef = await addDoc(collection(db, 'scheduled_posts'), {
+            ...data,
+            scheduledAt: data.scheduledAt,
+            status: 'pending',
+            createdAt: serverTimestamp(),
+        });
+        return docRef.id;
+    } catch (e) {
+        console.error("Scheduling Error:", e);
         throw e;
     }
 };

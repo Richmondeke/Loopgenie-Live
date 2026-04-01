@@ -73,11 +73,21 @@ export const generateEpisodeManifestForChannel = async (
     // Leverage the existing generateStory logic but with augmented context
     const idea = `Video for YouTube Channel "${channel.name}" (${channel.description}). Episode Title: "${episode.title}". Focus: ${episode.description}. Visual Style: ${channel.style}.`;
 
+    const preferences = channel.preferences || {
+        captionStyle: 'BOXED',
+        voiceId: 'Fenrir',
+        aspectRatio: '9:16',
+        animationStyle: 'ZOOM'
+    };
+
     return await generateStory({
         idea,
         style_tone: channel.style || 'Cinematic',
         durationTier,
         mode: 'SHORTS',
-        aspectRatio: '9:16'
+        aspectRatio: preferences.aspectRatio,
+        animationStyle: preferences.animationStyle,
+        captionStyle: preferences.captionStyle,
+        voice_preference: { voice: preferences.voiceId }
     });
 };

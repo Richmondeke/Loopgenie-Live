@@ -57,15 +57,18 @@ export const uploadToStorage = async (
         }
 
         // 3. Upload to Firebase Storage
+        console.log(`[StorageService] Starting upload of ${fileName} (${blobToUpload.size} bytes) to ${filePath}...`);
         const storageRef = ref(storage, filePath);
         const metadata = {
             contentType: contentType,
         };
 
         const uploadResult = await uploadBytes(storageRef, blobToUpload, metadata);
+        console.log(`[StorageService] Upload complete for ${fileName}. Fetching download URL...`);
 
         // 4. Get Download URL
         const publicUrl = await getDownloadURL(uploadResult.ref);
+        console.log(`[StorageService] Download URL obtained: ${publicUrl}`);
 
         return publicUrl;
 

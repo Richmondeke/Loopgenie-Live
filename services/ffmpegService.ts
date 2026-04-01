@@ -212,6 +212,7 @@ export const stitchVideoFrames = async (
     return new Promise(async (resolve, reject) => {
         // 5 Minute Safety Timeout
         const timeoutId = setTimeout(() => {
+            console.error("[ffmpegService] stitchVideoFrames TIMEOUT reached (300s)");
             reject(new Error("Video generation timed out."));
         }, 300000);
 
@@ -498,6 +499,7 @@ export const stitchVideoFrames = async (
                 requestAnimationFrame(renderLoop);
             };
 
+            console.log(`[ffmpegService] Starting render loop for ${scenes.length} scenes. Total duration: ${totalDurationMs}ms`);
             renderLoop();
 
         } catch (err) {
@@ -516,6 +518,7 @@ export const concatenateVideos = async (
 ): Promise<string> => {
     return new Promise(async (resolve, reject) => {
         const timeoutId = setTimeout(() => {
+            console.error("[ffmpegService] concatenateVideos TIMEOUT reached (1200s)");
             reject(new Error("Concatenation timed out."));
         }, 1200000);
 

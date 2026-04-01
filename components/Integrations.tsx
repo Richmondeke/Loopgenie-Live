@@ -1,10 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import {
-
     Youtube, Plus, Trash2, ExternalLink, RefreshCw, Loader2, CheckCircle,
-    AlertCircle, Settings, Users, Video, BarChart2, LogOut, ChevronRight,
-    PlayCircle, Upload, Eye, ThumbsUp, MessageSquare, TrendingUp, Globe
+    Settings, Users, Video, LogOut, ChevronRight,
+    Upload, Eye, Globe, X
 } from 'lucide-react';
 import { getCurrentUser } from '../services/authService';
 import { db } from '../firebase';
@@ -12,6 +10,7 @@ import {
     collection, query, where, getDocs, doc, setDoc, deleteDoc,
     serverTimestamp, onSnapshot, orderBy
 } from 'firebase/firestore';
+import { getYouTubeAuthUrl, handleYouTubeCallback } from '../services/youtubeService';
 
 // --- Types ---
 interface YouTubeAccount {
@@ -25,13 +24,6 @@ interface YouTubeAccount {
     viewCount?: string;
     connected: boolean;
     connectedAt: any;
-}
-
-interface ChannelStats {
-    subscribers: string;
-    videos: string;
-    views: string;
-    recentUploads: { title: string; views: string; thumb: string }[];
 }
 
 // --- Helpers ---
@@ -91,7 +83,6 @@ const ChannelCard: React.FC<{
             </div>
         </div>
 
-        {/* Disconnect button */}
         <button
             onClick={(e) => { e.stopPropagation(); onDisconnect(); }}
             className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all text-gray-600 hover:text-red-400 hover:bg-red-900/20"
@@ -112,7 +103,6 @@ const ChannelDetailPanel: React.FC<{ account: YouTubeAccount }> = ({ account }) 
 
     return (
         <div className="space-y-6">
-            {/* Channel Header */}
             <div className="bg-gradient-to-br from-red-950/40 to-gray-900 border border-red-900/30 rounded-3xl p-6">
                 <div className="flex items-start gap-5">
                     <img
@@ -151,7 +141,6 @@ const ChannelDetailPanel: React.FC<{ account: YouTubeAccount }> = ({ account }) 
                 </div>
             </div>
 
-            {/* Stats Grid */}
             <div className="grid grid-cols-3 gap-4">
                 {stats.map(({ icon: Icon, label, value, color }) => (
                     <div key={label} className="bg-gray-900/60 border border-gray-800 rounded-2xl p-4 text-center hover:border-gray-700 transition-colors">
@@ -162,7 +151,6 @@ const ChannelDetailPanel: React.FC<{ account: YouTubeAccount }> = ({ account }) 
                 ))}
             </div>
 
-            {/* Auto-Upload Info */}
             <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-5">
                 <div className="flex items-center gap-2 mb-3">
                     <Upload size={16} className="text-red-400" />
@@ -189,28 +177,48 @@ const ChannelDetailPanel: React.FC<{ account: YouTubeAccount }> = ({ account }) 
                             <option>Private</option>
                         </select>
                     </div>
-                    <div className="flex items-center justify-between py-2.5">
-                        <div>
-                            <div className="text-sm text-gray-300 font-medium">Notify subscribers</div>
-                            <div className="text-xs text-gray-500">Send notification bell alert on each upload</div>
-                        </div>
-                        <div className="w-11 h-6 bg-gray-700 rounded-full relative cursor-pointer flex-shrink-0">
-                            <div className="w-4 h-4 bg-white rounded-full absolute top-1 left-1 shadow-sm" />
-                        </div>
-                    </div>
                 </div>
-                <p className="text-[10px] text-gray-600 mt-3 italic">These settings apply when the YouTube Channel Maker publishes episodic series to this channel.</p>
             </div>
         </div>
     );
 };
 
-// --- Main Component ---
 export const Integrations: React.FC = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isConnecting, setIsConnecting] = useState(false);
     const [accounts, setAccounts] = useState<YouTubeAccount[]>([]);
     const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+
+    // Handle OAuth Callback
+    useEffect(() => {
+        const checkCallback = async () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+
+            if (code) {
+                setIsConnecting(true);
+                try {
+                    const user = await getCurrentUser();
+                    if (!user) throw new Error("User not logged in");
+
+                    const userId = user.id || (user as any).uid;
+                    const result = await handleYouTubeCallback(code, userId);
+
+                    if (result.success) {
+                        alert(`Successfully connected ${result.channelName}!`);
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    }
+                } catch (e: any) {
+                    console.error("OAuth Callback Error:", e);
+                    alert("Failed to connect YouTube: " + e.message);
+                } finally {
+                    setIsConnecting(false);
+                }
+            }
+        };
+
+        checkCallback();
+    }, []);
 
     useEffect(() => {
         let unsubscribe: (() => void) | null = null;
@@ -222,9 +230,10 @@ export const Integrations: React.FC = () => {
                 return;
             }
 
+            const userId = user.id || (user as any).uid;
             const q = query(
                 collection(db, 'youtube_accounts'),
-                where('user_id', '==', user.id),
+                where('user_id', '==', userId),
                 orderBy('connectedAt', 'desc')
             );
 
@@ -242,8 +251,7 @@ export const Integrations: React.FC = () => {
                 },
                 (error) => {
                     console.warn('[Integrations] Firestore error, falling back:', error);
-                    // Fallback without orderBy
-                    getDocs(query(collection(db, 'youtube_accounts'), where('user_id', '==', user.id)))
+                    getDocs(query(collection(db, 'youtube_accounts'), where('user_id', '==', userId)))
                         .then(snap => {
                             const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as YouTubeAccount));
                             setAccounts(items);
@@ -256,53 +264,16 @@ export const Integrations: React.FC = () => {
 
         init();
         return () => { if (unsubscribe) unsubscribe(); };
-    }, []);
+    }, [selectedAccountId]);
 
     const handleConnectYouTube = async () => {
         setIsConnecting(true);
         try {
-            const user = await getCurrentUser();
-            if (!user) {
-                alert('Please log in to connect a YouTube account.');
-                setIsConnecting(false);
-                return;
-            }
-
-            // In production, this would redirect to Google OAuth for YouTube scope.
-            // For now, we simulate the connection with a mock channel.
-            const mockChannels = [
-                { channelId: 'UCmock1', channelName: 'My Creative Channel', channelHandle: '@mycreativechannel', subscriberCount: '12400', videoCount: '87', viewCount: '450200' },
-                { channelId: 'UCmock2', channelName: 'Tech Shorts Daily', channelHandle: '@techshortsdaily', subscriberCount: '3100', videoCount: '234', viewCount: '89000' },
-                { channelId: 'UCmock3', channelName: 'Story Time Hub', channelHandle: '@storytimehub', subscriberCount: '890', videoCount: '45', viewCount: '21000' },
-            ];
-
-            // Pick one not already connected
-            const existingHandles = accounts.map(a => a.channelHandle);
-            const next = mockChannels.find(c => !existingHandles.includes(c.channelHandle));
-
-            if (!next) {
-                alert('All demo channels are connected. In production, you can connect unlimited real YouTube channels via Google OAuth.');
-                setIsConnecting(false);
-                return;
-            }
-
-            const docId = `${user.id}_${next.channelId}`;
-            await setDoc(doc(db, 'youtube_accounts', docId), {
-                user_id: user.id,
-                channelId: next.channelId,
-                channelName: next.channelName,
-                channelHandle: next.channelHandle,
-                channelAvatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(next.channelName)}&background=cc0000&color=fff&bold=true&size=200`,
-                subscriberCount: next.subscriberCount,
-                videoCount: next.videoCount,
-                viewCount: next.viewCount,
-                connected: true,
-                connectedAt: serverTimestamp(),
-            });
+            const authUrl = await getYouTubeAuthUrl();
+            window.location.href = authUrl;
         } catch (e: any) {
             console.error('Connect failed:', e);
             alert('Failed to connect: ' + e.message);
-        } finally {
             setIsConnecting(false);
         }
     };
@@ -310,7 +281,7 @@ export const Integrations: React.FC = () => {
     const handleDisconnect = async (accountId: string) => {
         const account = accounts.find(a => a.id === accountId);
         if (!account) return;
-        if (!confirm(`Disconnect "${account.channelName}"? This will stop auto-publishing to this channel.`)) return;
+        if (!confirm(`Disconnect "${account.channelName}"?`)) return;
 
         try {
             await deleteDoc(doc(db, 'youtube_accounts', accountId));
@@ -327,25 +298,24 @@ export const Integrations: React.FC = () => {
     const selectedAccount = accounts.find(a => a.id === selectedAccountId);
 
     return (
-        <div className="h-full overflow-y-auto p-4 md:p-8 bg-black text-gray-100 font-sans">
+        <div className="h-full overflow-y-auto p-4 md:p-8 bg-black text-gray-100">
             <div className="max-w-6xl mx-auto">
-                {/* Header */}
                 <div className="mb-8 flex items-end justify-between">
                     <div>
                         <div className="flex items-center gap-3 mb-2">
-                            <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center shadow-lg shadow-red-950/50">
+                            <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center">
                                 <Youtube size={22} className="text-white" />
                             </div>
                             <h2 className="text-3xl font-bold text-white">YouTube Channels</h2>
                         </div>
-                        <p className="text-gray-400 text-sm ml-13">
-                            Connect and manage your YouTube channels. Auto-publish completed videos directly from LoopGenie.
+                        <p className="text-gray-400 text-sm">
+                            Connect and manage your YouTube channels. Auto-publish completed videos directly.
                         </p>
                     </div>
                     <button
                         onClick={handleConnectYouTube}
                         disabled={isConnecting}
-                        className="flex items-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition-all shadow-lg shadow-red-950/40 active:scale-95 disabled:opacity-60 flex-shrink-0"
+                        className="flex items-center gap-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 text-white font-bold text-sm rounded-xl transition-all"
                     >
                         {isConnecting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                         Add Channel
@@ -358,42 +328,28 @@ export const Integrations: React.FC = () => {
                         <p className="text-sm">Loading your channels...</p>
                     </div>
                 ) : accounts.length === 0 ? (
-                    /* --- Empty State --- */
                     <div className="flex flex-col items-center justify-center py-20 text-center">
-                        <div className="w-24 h-24 bg-red-950/30 border border-red-900/30 rounded-3xl flex items-center justify-center mb-6 shadow-xl shadow-red-950/20">
+                        <div className="w-24 h-24 bg-red-950/30 border border-red-900/30 rounded-3xl flex items-center justify-center mb-6">
                             <Youtube size={48} className="text-red-500" />
                         </div>
                         <h3 className="text-2xl font-bold text-white mb-3">No YouTube Channels Connected</h3>
-                        <p className="text-gray-400 max-w-sm mb-8 leading-relaxed">
-                            Connect your YouTube channels to automatically publish AI-generated videos, manage uploads, and track performance — all from one place.
+                        <p className="text-gray-400 max-w-sm mb-8">
+                            Connect your YouTube channels to automatically publish AI-generated videos.
                         </p>
-
                         <button
                             onClick={handleConnectYouTube}
-                            disabled={isConnecting}
-                            className="flex items-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-500 text-white font-bold text-base rounded-2xl transition-all shadow-xl shadow-red-950/40 active:scale-95 disabled:opacity-60"
+                            className="flex items-center gap-3 px-8 py-4 bg-red-600 text-white font-bold rounded-2xl"
                         >
-                            {isConnecting ? <Loader2 size={20} className="animate-spin" /> : <Youtube size={20} />}
-                            Connect YouTube Channel
+                            <Youtube size={20} /> Connect YouTube Channel
                         </button>
-
-                        <div className="flex items-center gap-6 mt-10 text-sm text-gray-600">
-                            <div className="flex items-center gap-2"><CheckCircle size={14} className="text-green-500" /> Multiple channels</div>
-                            <div className="flex items-center gap-2"><CheckCircle size={14} className="text-green-500" /> Auto-publish</div>
-                            <div className="flex items-center gap-2"><CheckCircle size={14} className="text-green-500" /> Channel analytics</div>
-                        </div>
                     </div>
                 ) : (
-                    /* --- Connected Accounts View --- */
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                        {/* Left: Account List */}
                         <div className="lg:col-span-4 space-y-4">
-                            <div className="flex items-center justify-between mb-1 px-1">
-                                <div className="flex items-center gap-2">
-                                    <div className="w-1 h-5 bg-red-500 rounded-full" />
-                                    <span className="font-bold text-white text-sm">Connected Channels</span>
-                                    <span className="text-xs bg-red-900/40 text-red-400 border border-red-900/50 px-2 py-0.5 rounded-full font-bold">{accounts.length}</span>
-                                </div>
+                            <div className="flex items-center gap-2 mb-1 px-1">
+                                <div className="w-1 h-5 bg-red-500 rounded-full" />
+                                <span className="font-bold text-white text-sm">Connected Channels</span>
+                                <span className="text-xs bg-red-900/40 text-red-400 px-2 py-0.5 rounded-full font-bold">{accounts.length}</span>
                             </div>
 
                             {accounts.map(account => (
@@ -406,18 +362,14 @@ export const Integrations: React.FC = () => {
                                 />
                             ))}
 
-                            {/* Add Another */}
                             <button
                                 onClick={handleConnectYouTube}
-                                disabled={isConnecting}
-                                className="w-full py-3.5 border border-dashed border-gray-700 rounded-2xl text-sm text-gray-500 hover:text-white hover:border-red-600/50 hover:bg-red-950/10 transition-all flex items-center justify-center gap-2 group disabled:opacity-50"
+                                className="w-full py-3.5 border border-dashed border-gray-700 rounded-2xl text-sm text-gray-500 hover:text-white flex items-center justify-center gap-2"
                             >
-                                {isConnecting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} className="group-hover:text-red-400 transition-colors" />}
-                                Add Another Channel
+                                <Plus size={16} /> Add Another Channel
                             </button>
                         </div>
 
-                        {/* Right: Channel Detail */}
                         <div className="lg:col-span-8">
                             {selectedAccount ? (
                                 <ChannelDetailPanel account={selectedAccount} />

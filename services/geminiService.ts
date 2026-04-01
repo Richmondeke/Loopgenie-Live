@@ -17,16 +17,21 @@ export const invokeGemini = async (action: string, payload: any) => {
     let retries = 3;
     while (retries > 0) {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+
             const response = await fetch(FIREBASE_FUNCTION_URL, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
+                signal: controller.signal,
                 body: JSON.stringify({
                     action,
                     payload: { ...payload, apiKey: userApiKey, kieApiKey: kieApiKey }
                 })
             });
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));

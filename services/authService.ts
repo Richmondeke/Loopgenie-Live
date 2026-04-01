@@ -363,5 +363,13 @@ export const updatePassword = async (newPassword: string) => {
 
 export const getCurrentUser = async () => {
   if (!isFirebaseConfigured()) return getMockUser();
-  return auth.currentUser;
+  const user = auth.currentUser;
+  if (!user) return null;
+
+  // Normalize Firebase user to match legacy 'User' interface used in components
+  // adding both 'id' (for legacy) and keeping the original object
+  return Object.assign(user, {
+    id: user.uid,
+    user_metadata: { full_name: user.displayName || '' }
+  });
 };

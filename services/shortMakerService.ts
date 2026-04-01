@@ -113,6 +113,8 @@ export interface GenerateStoryRequest {
     mode?: 'SHORTS' | 'STORYBOOK';
     durationTier?: '15s' | '30s' | '60s' | '5m' | '10m' | '20m';
     aspectRatio?: '9:16' | '16:9' | '1:1' | '4:3';
+    animationStyle?: 'ZOOM' | 'PAN' | 'STATIC';
+    captionStyle?: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT' | 'NONE';
 }
 
 const withTimeout = <T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
@@ -153,7 +155,12 @@ export const generateStory = async (req: GenerateStoryRequest): Promise<ShortMak
     const manifest = await generateStoryBatch(req, targetScenesTotal, 1);
 
     manifest.scenes = manifest.scenes.map((s, i) => ({ ...s, scene_number: i + 1 }));
-    manifest.output_settings = { ...manifest.output_settings, video_resolution: targetResolution };
+    manifest.output_settings = {
+        ...manifest.output_settings,
+        video_resolution: targetResolution,
+        animation: req.animationStyle || 'ZOOM',
+        captions: req.captionStyle === 'NONE' ? { enabled: false, style: 'MINIMAL' } : { enabled: true, style: req.captionStyle || 'BOXED' }
+    };
 
     jobStore.update({ manifest });
     return manifest;
@@ -446,10 +453,17 @@ export interface EpisodicProductionRequest {
     onSceneReady?: (sceneIndex: number, imageUrl: string, narration: string, total: number) => void;
 }
 
-export const runEpisodicProduction = async ({ channel, episode, onProgress, onSceneReady }: EpisodicProductionRequest): Promise<string> => {
+export const runEpisodicProduction = async ({ channel, episode, onProgress, onSceneReady }: EpisodicProductionRequest): Promise<any> => {
     const log = (msg: string) => {
         console.log(`[EpisodicProd] ${msg}`);
         if (onProgress) onProgress(msg);
+    };
+
+    const preferences = channel.preferences || {
+        captionStyle: 'BOXED',
+        voiceId: 'Fenrir',
+        aspectRatio: '9:16',
+        animationStyle: 'ZOOM'
     };
 
     try {
@@ -462,13 +476,17 @@ export const runEpisodicProduction = async ({ channel, episode, onProgress, onSc
                 style_tone: channel.style || 'Cinematic',
                 mode: 'SHORTS',
                 durationTier: '30s',
-                aspectRatio: '9:16',
-                voice_preference: { voice: 'Fenrir' }
+                aspectRatio: preferences.aspectRatio,
+                animationStyle: preferences.animationStyle,
+                captionStyle: preferences.captionStyle,
+                voice_preference: { voice: preferences.voiceId }
             });
         }
 
         const generationSeed = manifest.seed || Math.random().toString();
         const workingScenes = [...manifest.scenes];
+        const aspectRatio = manifest.output_settings?.video_resolution === '1920x1080' ? '16:9' :
+            manifest.output_settings?.video_resolution === '1080x1080' ? '1:1' : '9:16';
 
         // 2. Generate Visuals
         log(`Generating ${workingScenes.length} scenes...`);
@@ -480,7 +498,7 @@ export const runEpisodicProduction = async ({ channel, episode, onProgress, onSc
                     scene,
                     generationSeed,
                     channel.style,
-                    '9:16',
+                    aspectRatio,
                     'nano_banana',
                     'AI'
                 );
@@ -496,7 +514,7 @@ export const runEpisodicProduction = async ({ channel, episode, onProgress, onSc
 
         // 3. Synthesize Audio
         log("Synthesizing voiceover...");
-        manifest = await synthesizeAudio(manifest, undefined, 'Fenrir');
+        manifest = await synthesizeAudio(manifest, undefined, preferences.voiceId);
 
         // 4. Assemble
         log("Assembling final video...");

@@ -1,9 +1,12 @@
 
 import React, { useState } from 'react';
 import { Project, ProjectStatus } from '../types';
-import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon, Edit3, Zap, Loader2 } from 'lucide-react';
+import { Clock, CheckCircle, AlertOctagon, Download, Play, RefreshCw, X, ExternalLink, Image as ImageIcon, Edit3, Zap, Loader2, Youtube, Calendar } from 'lucide-react';
 import { dispatchProjectToWebhook } from '../services/webhookService';
 import { getCurrentUser, getUserProfile } from '../services/authService';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { ScheduleModal } from './ScheduleModal';
 
 interface ProjectListProps {
     projects: Project[];
@@ -17,6 +20,33 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [sendingWebhookId, setSendingWebhookId] = useState<string | null>(null);
     const [sentWebhookId, setSentWebhookId] = useState<string | null>(null);
+    const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+    const [youtubeAccounts, setYoutubeAccounts] = useState<any[]>([]);
+    const [showScheduleModal, setShowScheduleModal] = useState(false);
+    const [projectToSchedule, setProjectToSchedule] = useState<Project | null>(null);
+    const [userId, setUserId] = useState<string | null>(null);
+
+    // Fetch YouTube accounts for scheduling
+    React.useEffect(() => {
+        let unsubscribe: (() => void) | null = null;
+
+        const init = async () => {
+            const user = await getCurrentUser();
+            if (user) {
+                const uid = user.id || (user as any).uid;
+                setUserId(uid);
+
+                const q = query(collection(db, 'youtube_accounts'), where('user_id', '==', uid));
+                unsubscribe = onSnapshot(q, (snapshot) => {
+                    const accounts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setYoutubeAccounts(accounts);
+                });
+            }
+        };
+
+        init();
+        return () => { if (unsubscribe) unsubscribe(); };
+    }, []);
 
     // Filter projects based on category
     const filteredProjects = projects.filter(p => {
@@ -223,14 +253,28 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
 
                                                 {/* Workflow Button for Storybook/Shorts */}
                                                 {(project.type === 'STORYBOOK' || project.type === 'SHORTS') && onEditProject && project.metadata && (
-                                                    <button
-                                                        onClick={() => onEditProject(project)}
-                                                        className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-all shadow-sm"
-                                                        title="View individual scenes and prompts"
-                                                    >
-                                                        <Edit3 size={16} />
-                                                        <span className="hidden sm:inline">Workflow</span>
-                                                    </button>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={() => setExpandedProjectId(expandedProjectId === project.id ? null : project.id)}
+                                                            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm border ${expandedProjectId === project.id
+                                                                ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 text-indigo-600'
+                                                                : 'bg-white dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50'
+                                                                }`}
+                                                            title="View individual scene images"
+                                                        >
+                                                            <ImageIcon size={16} />
+                                                            <span className="hidden sm:inline">{expandedProjectId === project.id ? 'Hide Scenes' : 'View Scenes'}</span>
+                                                        </button>
+
+                                                        <button
+                                                            onClick={() => onEditProject(project)}
+                                                            className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-xl text-sm font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-all shadow-sm"
+                                                            title="Edit prompts and regenerate"
+                                                        >
+                                                            <Edit3 size={16} />
+                                                            <span className="hidden sm:inline">Workflow</span>
+                                                        </button>
+                                                    </div>
                                                 )}
 
                                                 <button
@@ -250,6 +294,21 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                                                     <Download size={16} />
                                                     <span className="hidden sm:inline">Download</span>
                                                 </a>
+
+                                                {/* YouTube Schedule Button */}
+                                                {youtubeAccounts.length > 0 && (
+                                                    <button
+                                                        onClick={() => {
+                                                            setProjectToSchedule(project);
+                                                            setShowScheduleModal(true);
+                                                        }}
+                                                        className="flex items-center gap-2 px-4 py-2.5 bg-red-600/10 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded-xl text-sm font-bold hover:bg-red-600/20 transition-all shadow-sm w-full sm:w-auto justify-center"
+                                                        title="Schedule to YouTube"
+                                                    >
+                                                        <Youtube size={16} />
+                                                        <span className="hidden sm:inline">Schedule</span>
+                                                    </button>
+                                                )}
                                             </>
                                         ) : project.status === ProjectStatus.FAILED ? (
                                             <div className="text-red-500 font-medium text-sm bg-red-50 dark:bg-red-900/20 px-4 py-2 rounded-xl border border-red-100 dark:border-red-900/30">Failed</div>
@@ -259,6 +318,34 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                                             </div>
                                         )}
                                     </div>
+                                    {expandedProjectId === project.id && project.metadata?.scenes && (
+                                        <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700 animate-in slide-in-from-top-4 duration-300">
+                                            <div className="flex items-center justify-between mb-3 px-1">
+                                                <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Production Assets ({project.metadata.scenes.length} Scenes)</span>
+                                                <span className="text-[10px] font-bold text-indigo-500">Scroll to view →</span>
+                                            </div>
+                                            <div className="flex gap-3 overflow-x-auto pb-4 px-1 no-scrollbar snap-x">
+                                                {project.metadata.scenes.map((scene: any, idx: number) => (
+                                                    <div key={idx} className="min-w-[120px] max-w-[120px] aspect-[9/16] bg-gray-100 dark:bg-gray-900 rounded-xl overflow-hidden shadow-sm border border-gray-200 dark:border-gray-700 snap-start group/scene relative">
+                                                        <img
+                                                            src={scene.generated_image_url || scene.image_url}
+                                                            className="w-full h-full object-cover"
+                                                            alt={`Scene ${idx + 1}`}
+                                                        />
+                                                        <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
+                                                            <span className="text-[9px] font-black text-white uppercase tracking-tighter">S{idx + 1}</span>
+                                                        </div>
+                                                        <button
+                                                            onClick={() => setSelectedItem({ url: scene.generated_image_url || scene.image_url, name: `Scene ${idx + 1} - ${project.templateName}`, type: 'IMAGE' })}
+                                                            className="absolute inset-0 bg-black/40 opacity-0 group-hover/scene:opacity-100 transition-opacity flex items-center justify-center text-white"
+                                                        >
+                                                            <ExternalLink size={16} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -297,6 +384,18 @@ export const ProjectList: React.FC<ProjectListProps> = ({ projects, onPollStatus
                         </div>
                     </div>
                 </div>
+            )}
+
+            {showScheduleModal && projectToSchedule && userId && (
+                <ScheduleModal
+                    project={projectToSchedule}
+                    channels={youtubeAccounts}
+                    userId={userId}
+                    onClose={() => {
+                        setShowScheduleModal(false);
+                        setProjectToSchedule(null);
+                    }}
+                />
             )}
         </>
     );

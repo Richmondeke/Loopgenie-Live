@@ -203,6 +203,13 @@ export interface YouTubeEpisode {
   scheduledAt?: number;
 }
 
+export interface YouTubeChannelPreferences {
+  captionStyle: 'BOXED' | 'OUTLINE' | 'MINIMAL' | 'HIGHLIGHT' | 'NONE';
+  voiceId: string;
+  aspectRatio: '9:16' | '16:9' | '1:1';
+  animationStyle: 'ZOOM' | 'PAN' | 'STATIC';
+}
+
 export interface YouTubeChannel {
   id: string;
   userId: string;
@@ -214,6 +221,7 @@ export interface YouTubeChannel {
   style?: string;
   episodes: YouTubeEpisode[];
   createdAt: number;
+  preferences?: YouTubeChannelPreferences;
 
   // YouTube Integration
   youtubeId?: string;

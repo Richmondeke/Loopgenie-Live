@@ -1,9 +1,38 @@
 
 import { onRequest } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import * as logger from "firebase-functions/logger";
 import { defineSecret } from "firebase-functions/params";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
+// import { google } from "googleapis"; // Moved to dynamic import to avoid deployment timeout
 
+// Initialize Admin SDK
+if (getApps().length === 0) {
+    initializeApp();
+}
+const db = getFirestore();
+
+// Define Secrets
 const geminiApiKey = defineSecret("GEMINI_API");
+
+// YouTube OAuth Configuration
+const SCOPES = [
+    'https://www.googleapis.com/auth/youtube.upload',
+    'https://www.googleapis.com/auth/youtube.readonly',
+    'https://www.googleapis.com/auth/userinfo.profile'
+];
+
+const getOAuth2Client = async (redirectUri?: string) => {
+    const { google } = await import("googleapis");
+    const clientId = process.env.GOOGLE_CLIENT_ID || "REPLACE_WITH_GOOGLE_CLIENT_ID";
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "REPLACE_WITH_GOOGLE_CLIENT_SECRET";
+    return new google.auth.OAuth2(
+        clientId,
+        clientSecret,
+        redirectUri || 'http://localhost:5173/oauth-callback'
+    );
+};
 
 
 const cleanJson = (text: string) => {
@@ -163,6 +192,106 @@ export const geminiApi = onRequest({ secrets: [geminiApiKey], cors: true, invoke
                 result = { success: response.ok, status: response.status, contentType, details: text };
             }
 
+        } else if (action === 'get-youtube-auth-url') {
+            const { redirectUri } = payload;
+            const oauth2Client = await getOAuth2Client(redirectUri);
+            const url = oauth2Client.generateAuthUrl({
+                access_type: 'offline',
+                scope: SCOPES,
+                prompt: 'consent'
+            });
+            result = { url };
+
+        } else if (action === 'handle-youtube-callback') {
+            const { code, redirectUri, userId } = payload;
+            if (!code || !userId) throw new Error("Missing code or userId");
+
+            const oauth2Client = await getOAuth2Client(redirectUri);
+            const { tokens } = await oauth2Client.getToken(code);
+            oauth2Client.setCredentials(tokens);
+
+            const { google } = await import("googleapis");
+            const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+            const channelRes = await youtube.channels.list({
+                part: ['snippet', 'statistics'],
+                mine: true
+            });
+
+            const channel = channelRes.data.items?.[0];
+            if (!channel) throw new Error("No YouTube channel found.");
+
+            const channelData = {
+                user_id: userId,
+                channelId: channel.id,
+                channelName: channel.snippet?.title,
+                channelHandle: channel.snippet?.customUrl,
+                channelAvatar: channel.snippet?.thumbnails?.default?.url,
+                subscriberCount: channel.statistics?.subscriberCount,
+                videoCount: channel.statistics?.videoCount,
+                viewCount: channel.statistics?.viewCount,
+                accessToken: tokens.access_token,
+                refreshToken: tokens.refresh_token,
+                expiryDate: tokens.expiry_date,
+                connected: true,
+                connectedAt: FieldValue.serverTimestamp(),
+            };
+
+            const docId = `${userId}_${channel.id}`;
+            await db.collection('youtube_accounts').doc(docId).set(channelData, { merge: true });
+            result = { success: true, channelName: channel.snippet?.title };
+
+        } else if (action === 'publish-youtube-video') {
+            const { userId, channelId, videoUrl, title, description, privacyStatus } = payload;
+            if (!userId || !channelId || !videoUrl) throw new Error("Missing required fields");
+
+            const userChannel = await db.collection('youtube_accounts').doc(`${userId}_${channelId}`).get();
+            if (!userChannel.exists) throw new Error("YouTube account not found");
+
+            const channelData = userChannel.data()!;
+            const oauth2Client = await getOAuth2Client();
+            oauth2Client.setCredentials({
+                access_token: channelData.accessToken,
+                refresh_token: channelData.refreshToken,
+                expiry_date: channelData.expiryDate
+            });
+
+            // Handle token refresh
+            const isTokenExpiring = !channelData.expiryDate || channelData.expiryDate <= (Date.now() + 60000);
+            if (isTokenExpiring && channelData.refreshToken) {
+                const refreshRes = await oauth2Client.refreshAccessToken();
+                const tokens = refreshRes.credentials;
+                await userChannel.ref.update({
+                    accessToken: tokens.access_token,
+                    expiryDate: tokens.expiry_date,
+                    refreshToken: tokens.refresh_token || channelData.refreshToken
+                });
+                oauth2Client.setCredentials(tokens);
+            }
+
+            const { google } = await import("googleapis");
+            const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+            const videoResponse = await fetch(videoUrl);
+            const buffer = await videoResponse.arrayBuffer();
+
+            const ytRes = await youtube.videos.insert({
+                part: ['snippet', 'status'],
+                requestBody: {
+                    snippet: {
+                        title: title || "Uploaded via LoopGenie",
+                        description: description || "",
+                        categoryId: '22',
+                    },
+                    status: {
+                        privacyStatus: privacyStatus || 'public',
+                        selfDeclaredMadeForKids: false,
+                    },
+                },
+                media: {
+                    body: Buffer.from(buffer),
+                },
+            });
+            result = { success: true, videoId: ytRes.data.id };
+
         } else {
             throw new Error(`Unknown action: ${action}`);
         }
@@ -174,28 +303,99 @@ export const geminiApi = onRequest({ secrets: [geminiApiKey], cors: true, invoke
     }
 });
 
-// --- MEDIA API (Deprecated / Alias to geminiApi if needed) ---
-export const mediaApi = geminiApi;
+// --- SCHEDULING ---
 
-// --- PROXY WEBHOOK (Dedicated entry point if called directly) ---
-export const proxyWebhook = onRequest({ cors: true, invoker: 'public' }, async (req, res) => {
-    try {
-        const payload = req.body.payload || req.body;
-        const { url, data, method = 'POST' } = payload;
-        if (!url) { res.status(400).json({ error: "Missing URL" }); return; }
+export const checkScheduledUploads = onSchedule({
+    schedule: "every 5 minutes",
+    timeoutSeconds: 540,
+    memory: "1GiB"
+}, async (event) => {
+    const now = Timestamp.now();
+    const snapshot = await db.collection('scheduled_posts')
+        .where('status', '==', 'pending')
+        .where('scheduledAt', '<=', now)
+        .limit(5)
+        .get();
 
-        const options: RequestInit = {
-            method: method.toUpperCase(),
-            headers: { 'Content-Type': 'application/json' }
-        };
-        if (method.toUpperCase() !== 'GET') options.body = JSON.stringify(data);
-
-        const response = await fetch(url, options);
-        const text = await response.text();
-        res.status(response.ok ? 200 : 400).json({ success: response.ok, status: response.status, details: text });
-    } catch (error: any) {
-        logger.error("proxyWebhook Error:", error);
-        res.status(500).json({ error: error.message });
+    if (snapshot.empty) {
+        logger.info("No scheduled uploads to process.");
+        return;
     }
+
+    const tasks = snapshot.docs.map(async (doc) => {
+        const post = doc.data();
+        const postId = doc.id;
+
+        try {
+            await doc.ref.update({ status: 'uploading' });
+
+            const userChannel = await db.collection('youtube_accounts').doc(`${post.userId}_${post.channelId}`).get();
+            if (!userChannel.exists) {
+                throw new Error("Connected YouTube channel not found.");
+            }
+
+            const channelData = userChannel.data()!;
+            const oauth2Client = await getOAuth2Client();
+            oauth2Client.setCredentials({
+                access_token: channelData.accessToken,
+                refresh_token: channelData.refreshToken,
+                expiry_date: channelData.expiryDate
+            });
+
+            const isTokenExpiring = !channelData.expiryDate || channelData.expiryDate <= (Date.now() + 60000);
+            if (isTokenExpiring && channelData.refreshToken) {
+                const refreshRes = await oauth2Client.refreshAccessToken();
+                const tokens = refreshRes.credentials;
+                await userChannel.ref.update({
+                    accessToken: tokens.access_token,
+                    expiryDate: tokens.expiry_date,
+                    refreshToken: tokens.refresh_token || channelData.refreshToken
+                });
+                oauth2Client.setCredentials(tokens);
+            }
+
+            const { google } = await import("googleapis");
+            const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+
+            // Download video from Storage or URL
+            const response = await fetch(post.videoUrl);
+            const buffer = await response.arrayBuffer();
+
+            const res = await youtube.videos.insert({
+                part: ['snippet', 'status'],
+                requestBody: {
+                    snippet: {
+                        title: post.title || "Uploaded via LoopGenie",
+                        description: post.description || "",
+                        categoryId: '22', // People & Blogs
+                    },
+                    status: {
+                        privacyStatus: post.privacyStatus || 'public',
+                        selfDeclaredMadeForKids: false,
+                    },
+                },
+                media: {
+                    body: Buffer.from(buffer),
+                },
+            });
+
+            await doc.ref.update({
+                status: 'completed',
+                youtubeVideoId: res.data.id,
+                completedAt: FieldValue.serverTimestamp()
+            });
+
+            logger.info(`Successfully uploaded video ${res.data.id} for post ${postId}`);
+        } catch (error: any) {
+            logger.error(`Failed to upload post ${postId}:`, error);
+            await doc.ref.update({
+                status: 'failed',
+                error: error.message,
+                failedAt: FieldValue.serverTimestamp()
+            });
+        }
+    });
+
+    await Promise.all(tasks);
 });
 
